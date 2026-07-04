@@ -1,0 +1,25 @@
+# Secrets / personal configuration — NEVER commit (public repo!)
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Vercel
+.vercel
+
+# Node (if tooling gets added)
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
