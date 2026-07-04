@@ -61,6 +61,45 @@ def test_landing_create_channel_and_build_link(server, page):
     assert "does not look like" in page.text_content("#add-error")
 
 
+def test_landing_send_message_and_cookie_save(server, page):
+    page.goto(server.base + "/")
+    page.fill("#channel-name", "Send UI")
+    page.click("#create-btn")
+    page.wait_for_selector("#create-result:not([hidden])")
+    code = page.text_content("#new-code").strip()
+
+    # the send form and the developer curl example are prefilled with the code
+    assert page.input_value("#send-code") == code
+    assert page.text_content("#curl-code") == code
+
+    # send a message straight from the landing page
+    page.fill("#send-title", "Hello from landing")
+    page.click("#send-btn")
+    page.wait_for_selector("#send-ok:not([hidden])")
+    assert "no device" in page.text_content("#send-ok").lower()  # sent=0, none yet
+    # it really reached the channel
+    snap = server.post("/api/messages", {"code": code}).json
+    assert snap["messages"][0]["title"] == "Hello from landing"
+
+    # cookie save is opt-in: the button does nothing until consent is ticked
+    page.click("#save-btn")
+    assert "tick the box" in page.text_content("#save-status").lower()
+    page.check("#save-consent")
+    page.click("#save-btn")
+    assert "saved" in page.text_content("#save-status").lower()
+
+    # returning to the page restores the channel from the cookie
+    page.goto(server.base + "/")
+    page.wait_for_selector("#code-list .codes-item span")
+    assert code in page.text_content("#code-list")
+    assert page.is_checked("#save-consent")
+
+    # "forget" clears the cookie
+    page.click("#forget-btn")
+    page.goto(server.base + "/")
+    assert page.query_selector("#code-list .codes-item") is None
+
+
 def test_app_page_renders_channel_and_sends(server, page, channel):
     page.goto(server.base + "/a#codes=" + channel)
     page.wait_for_selector(".channel h2:has-text('Test Channel')")

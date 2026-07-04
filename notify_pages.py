@@ -60,6 +60,14 @@ h2{font-size:1.05rem;margin:0 0 6px}
 padding:16px;margin:14px 0;overflow-wrap:anywhere}
 input,textarea{width:100%;padding:10px 12px;margin:6px 0;border:1px solid var(--border);
 border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
+label{display:block;font-size:.8rem;color:var(--muted);margin:10px 0 2px}
+code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85em;
+background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:1px 5px}
+.checkline{display:flex;gap:8px;align-items:flex-start;font-size:.95rem;
+color:var(--text);margin:4px 0}
+.checkline input{width:auto;margin:2px 0 0}
+.warn{border-left:3px solid #f59e0b;padding-left:10px}
+.apilist{padding-left:18px;line-height:1.75}
 button,.btn{display:inline-block;padding:10px 16px;margin:6px 6px 0 0;border:0;
 border-radius:10px;background:var(--accent);color:#fff;font:inherit;font-weight:600;
 cursor:pointer;text-decoration:none}
@@ -160,12 +168,54 @@ On your phone: open the link (or scan the QR code), then use
 </div>
 
 <div class="card">
-<h2>3. Send messages</h2>
-<p class="muted">From the app itself, or from any script or service that can make
-an HTTP request:</p>
+<h2>3. Send a message</h2>
+<p class="muted">Send to a channel's subscribers right now &mdash; anyone who has the
+channel code can send.</p>
+<label for="send-code">Channel code</label>
+<input id="send-code" list="send-code-list" placeholder="Paste or pick a channel code" autocomplete="off">
+<datalist id="send-code-list"></datalist>
+<input id="send-title" maxlength="120" placeholder="Title" autocomplete="off">
+<textarea id="send-body" maxlength="2000" rows="3" placeholder="Message text (optional)"></textarea>
+<input id="send-url" maxlength="500" placeholder="Link https://… (optional)" autocomplete="off">
+<button id="send-btn">Send message</button>
+<p class="err" id="send-error"></p>
+<p class="status-ok" id="send-ok" hidden></p>
+</div>
+
+<div class="card">
+<h2>4. Send from your own code</h2>
+<p class="muted">Any script or service that can POST JSON can send to a channel &mdash;
+the channel code is the only credential, no SDK or login needed.</p>
 <pre>curl -X POST <span id="curl-host"></span>/api/message \\
   -H "Content-Type: application/json" \\
-  -d '{"code":"YOUR_CHANNEL_CODE","title":"Hello","body":"World"}'</pre>
+  -d '{"code":"<span id="curl-code">YOUR_CHANNEL_CODE</span>","title":"Hello","body":"World"}'</pre>
+<details>
+<summary>All endpoints</summary>
+<p class="muted">All are <code>POST</code> with a JSON body; the channel code goes in
+the body, never the URL.</p>
+<ul class="muted apilist">
+<li><code>/api/message</code> &mdash; send (title &le;120, body &le;2000, optional http(s) url &le;500)</li>
+<li><code>/api/messages</code> &mdash; recent messages + subscriber count</li>
+<li><code>/api/channel</code> &mdash; create a channel (optional name)</li>
+<li><code>/api/subscribe</code> / <code>/api/unsubscribe</code> &mdash; register a device (used by the app)</li>
+</ul>
+</details>
+</div>
+
+<div class="card">
+<h2>Remember my channels on this device</h2>
+<label class="checkline"><input type="checkbox" id="save-consent">
+Save my channel codes so they reappear when I come back</label>
+<p class="muted warn">&#9888; If you tick this and press <strong>Save</strong>, a
+<strong>cookie</strong> is stored in this browser holding your channel codes, and it
+is sent to this site on future visits so your channels reappear. Channel codes are
+secrets (anyone with a code can send and read) &mdash; only do this on a device you
+trust.</p>
+<div class="row">
+<button id="save-btn">Save channels</button>
+<button class="ghost" id="forget-btn">Forget saved channels</button>
+</div>
+<p class="muted" id="save-status"></p>
 </div>
 
 <footer class="muted">Hobby project, no warranty &middot;
@@ -194,7 +244,8 @@ item.appendChild(el('span','',c));
 var rm=el('button','danger','Remove');
 rm.addEventListener('click',function(){
 codes=codes.filter(function(x){return x!==c});renderCodes();updateLink()});
-item.appendChild(rm);list.appendChild(item)})}
+item.appendChild(rm);list.appendChild(item)});
+updateSendUI()}
 function updateLink(){
 var res=$('#link-result');
 if(!codes.length){res.hidden=true;return}
@@ -222,7 +273,7 @@ $('#create-error').textContent='';
 api('/api/channel',{name:$('#channel-name').value}).then(function(j){
 $('#new-code').textContent=j.code;
 $('#create-result').hidden=false;
-addCode(j.code)}).catch(function(e){
+addCode(j.code);$('#send-code').value=j.code;updateCurlCode()}).catch(function(e){
 $('#create-error').textContent='Could not create channel: '+e.message}).then(function(){
 btn.disabled=false})});
 document.addEventListener('click',function(e){
@@ -233,7 +284,63 @@ if(!src||!navigator.clipboard)return;
 navigator.clipboard.writeText(src.textContent).then(function(){
 var old=t.textContent;t.textContent='Copied!';
 setTimeout(function(){t.textContent=old},1200)})});
+// ---- send a message from the landing page
+function updateCurlCode(){
+var c=$('#send-code').value.trim();
+$('#curl-code').textContent=CODE_RE.test(c)?c:'YOUR_CHANNEL_CODE'}
+function updateSendUI(){
+var dl=$('#send-code-list');dl.textContent='';
+codes.forEach(function(c){var o=document.createElement('option');o.value=c;dl.appendChild(o)});
+var sc=$('#send-code');
+if(!sc.value&&codes.length)sc.value=codes[codes.length-1];
+updateCurlCode()}
+$('#send-code').addEventListener('input',updateCurlCode);
+$('#send-btn').addEventListener('click',function(){
+var code=$('#send-code').value.trim(),title=$('#send-title').value.trim();
+var err=$('#send-error'),ok=$('#send-ok');err.textContent='';ok.hidden=true;
+if(!CODE_RE.test(code)){err.textContent='Enter a valid channel code (create one above, or paste it).';return}
+if(!title){err.textContent='Enter a title.';return}
+var btn=this;btn.disabled=true;
+api('/api/message',{code:code,title:title,body:$('#send-body').value,url:$('#send-url').value})
+.then(function(j){
+$('#send-title').value='';$('#send-body').value='';$('#send-url').value='';
+var m;
+if(j.push_disabled)m='Stored. Push is not configured on this server.';
+else if(j.sent>0)m='Sent to '+j.sent+' device(s).';
+else m='Message stored, but no device is subscribed to this channel yet. Install the app on a phone and enable notifications to receive it.';
+ok.textContent=m;ok.hidden=false})
+.catch(function(e){err.textContent='Could not send: '+(e.message||'error')})
+.then(function(){btn.disabled=false})});
+// ---- optional: remember channels in a cookie (opt-in)
+function setCookie(n,v,days){
+var d=new Date();d.setTime(d.getTime()+days*864e5);
+var sec=location.protocol==='https:'?';Secure':'';
+document.cookie=n+'='+encodeURIComponent(v)+';expires='+d.toUTCString()+';path=/;SameSite=Lax'+sec}
+function getCookie(n){
+var m=document.cookie.match(new RegExp('(?:^|; )'+n+'=([^;]*)'));
+return m?decodeURIComponent(m[1]):null}
+function delCookie(n){
+document.cookie=n+'=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax'}
+$('#save-btn').addEventListener('click',function(){
+var st=$('#save-status');
+if(!$('#save-consent').checked){
+st.textContent='Tick the box first \\u2014 that is your consent to store a cookie.';return}
+if(!codes.length){st.textContent='Create or add at least one channel first.';return}
+setCookie('nbw_codes',codes.join(','),365);
+st.textContent='Saved '+codes.length+' channel(s) in a cookie on this device.'});
+$('#forget-btn').addEventListener('click',function(){
+delCookie('nbw_codes');$('#save-consent').checked=false;
+$('#save-status').textContent='Saved channels cleared from this device.'});
+(function loadSaved(){
+var saved=getCookie('nbw_codes');if(!saved)return;
+var added=false;
+saved.split(',').forEach(function(c){
+if(CODE_RE.test(c)&&codes.indexOf(c)<0){codes.push(c);added=true}});
+if(added){renderCodes();updateLink()}
+if(codes.length){$('#save-consent').checked=true;
+$('#save-status').textContent='Loaded '+codes.length+' saved channel(s) from a cookie on this device.'}})();
 $('#curl-host').textContent=location.origin;
+updateSendUI();
 })();
 </script>
 </body>
