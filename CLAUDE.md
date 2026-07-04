@@ -22,6 +22,31 @@ from any third-party service. No accounts, no logins.
 - No personal data. Never log channel keys or push endpoints. Consider storing only a
   hash of the channel key server-side so a DB leak doesn't leak send capability.
 
+## Install-URL trick (core UX idea — the app URL carries the channel codes)
+
+The URL used to install the Home Screen app **contains the channel code(s)** the user
+wants to subscribe to. Flow:
+
+1. A user-friendly page lets the user select/enter one or more channel codes (or scan
+   their QR codes).
+2. The page **generates an app URL containing all chosen codes** (e.g.
+   `/a#codes=KEY1,KEY2`) and shows it with instructions (+ QR of that URL).
+3. The user opens that URL on the phone and adds it to the Home Screen → the installed
+   PWA knows its channels from its own URL, no post-install setup or local account.
+
+Implementation facts:
+- Put the codes in the **URL fragment (`#`)**, not the query string: fragments are never
+  sent to the server → keys stay out of server/CDN logs; page JS reads them client-side.
+- The **manifest must preserve the codes**: serve `manifest.webmanifest` dynamically (or
+  reference it with the codes, e.g. `<link rel="manifest" href="/manifest?...">`) so its
+  `start_url` is the app URL *including* the codes — a static fixed `start_url` would make
+  every install open the same code-less page. Verify behavior on both iOS Safari
+  (Add to Home Screen) and Android Chrome at implementation time.
+- The URL codes are the *initial* channel set. The push subscription itself is one
+  endpoint per install (per origin + service worker); the server maps channel → endpoints.
+  The installed app can still add/remove channels later without changing its URL.
+- Multiple codes in one URL ⇒ one installed app, several channels.
+
 ## Tech stack
 
 - **Vercel** Hobby tier, single app, public GitHub repo.
@@ -55,8 +80,9 @@ from any third-party service. No accounts, no logins.
   the third-party integration endpoint — keep it a dead-simple POST
 - `GET /api/messages?key=…` → recent messages (also backs the channel web page)
 - `POST /api/subscribe` (key + PushSubscription JSON) / `POST /api/unsubscribe`
-- Web UI routes: `/` (create/join channel), `/c` (channel view: send + message list),
-  served inline from the function
+- Web UI routes: `/` (create channel + **URL generator**: pick/enter codes → app URL with
+  all codes + QR), `/a#codes=…` (the installable app page: subscribes, shows channels,
+  send + message list per channel), served inline from the function
 
 ## Security & operations requirements
 

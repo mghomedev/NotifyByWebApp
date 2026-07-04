@@ -10,10 +10,13 @@ Android and iOS smartphones — no app store, no user accounts.
 
 1. **Anyone can create a message channel.** Creating a channel produces a long, secure,
    non-guessable channel key (also shown as a QR code).
-2. **Subscribers** add the app to their phone's Home Screen and subscribe to one or more
-   channels by scanning the QR code or entering the key. From then on they receive channel
-   messages as native push notifications via the platform's built-in PWA push support
-   (Android, and iOS 16.4+ where the app must be installed to the Home Screen).
+2. **Subscribers** open a user-friendly page on their phone where they select or enter one
+   or more channel codes (or scan their QR codes). The page then **generates a URL that
+   contains all chosen codes — this URL is the app**: opened on the phone and added to the
+   Home Screen, the installed PWA is pre-configured for exactly those channels. From then
+   on subscribers receive channel messages as native push notifications via the platform's
+   built-in PWA push support (Android, and iOS 16.4+ where the app must be installed to
+   the Home Screen).
 3. **Senders** — anyone who has the channel key — can send messages to all subscribers of
    that channel, either through a small web interface or through a plain HTTP API that any
    third-party service can call.
