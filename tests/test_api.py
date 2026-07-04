@@ -358,6 +358,58 @@ def test_health(server):
     assert resp.status == 200 and resp.json == {"ok": True}
 
 
+def test_status_endpoint_with_secret_header(server):
+    from conftest import TEST_STATUS_SECRET, TEST_VAPID_PRIVATE
+
+    resp = server.get(
+        "/api/status", headers={"Authorization": "Bearer " + TEST_STATUS_SECRET}
+    )
+    assert resp.status == 200
+    d = resp.json
+    assert d["ok"] is True
+    assert d["push"]["configured"] is True
+    assert d["storage"] == {"backend": "memory", "reachable": True}
+    assert d["limits"]["rate_per_min"] == 120
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+    # the diagnostics must not leak any secret value
+    body = resp.raw.decode("utf-8")
+    assert TEST_VAPID_PRIVATE not in body
+    assert TEST_STATUS_SECRET not in body
+
+
+def test_status_endpoint_with_query_secret(server):
+    from conftest import TEST_STATUS_SECRET
+
+    resp = server.get("/api/status?key=" + TEST_STATUS_SECRET)
+    assert resp.status == 200
+    assert resp.json["storage"]["backend"] == "memory"
+
+
+def test_status_rejects_missing_or_wrong_secret(server):
+    assert server.get("/api/status").status == 401
+    assert server.get("/api/status?key=nope").status == 401
+    assert (
+        server.get(
+            "/api/status", headers={"Authorization": "Bearer wrong"}
+        ).status
+        == 401
+    )
+
+
+def test_status_disabled_without_secret_configured(server, env):
+    env.delenv("NBW_STATUS_SECRET", raising=False)
+    # fails closed: without the secret configured the endpoint is invisible
+    from conftest import TEST_STATUS_SECRET
+
+    assert server.get("/api/status").status == 404
+    assert (
+        server.get(
+            "/api/status", headers={"Authorization": "Bearer " + TEST_STATUS_SECRET}
+        ).status
+        == 404
+    )
+
+
 def test_cors_preflight(server):
     resp = server.options("/api/message")
     assert resp.status == 204

@@ -322,6 +322,51 @@ def test_get_storage_picks_backend(monkeypatch):
     core.reset_storage_for_tests()
 
 
+def test_storage_status_memory(env):
+    core.reset_storage_for_tests()
+    assert core.storage_status() == {"backend": "memory", "reachable": True}
+
+
+def test_storage_status_redis_unreachable(monkeypatch):
+    class DeadRedis(core.RedisStorage):
+        def ping(self):
+            raise core.StorageError("down")
+
+    monkeypatch.setattr(core, "get_storage", lambda: DeadRedis("http://x", "t"))
+    assert core.storage_status() == {"backend": "redis", "reachable": False}
+
+
+def test_diagnostics_reports_config_and_hides_secrets(env):
+    core.reset_storage_for_tests()
+    d = core.diagnostics()
+    assert d["ok"] is True
+    assert d["push"]["configured"] is True  # env fixture sets VAPID keys
+    assert d["storage"] == {"backend": "memory", "reachable": True}
+    assert d["limits"]["max_subs_per_channel"] == 200
+    assert "env" in d and "commit" in d and "region" in d
+    priv, _pub, _subj = core.vapid_config()
+    blob = json.dumps(d)
+    assert priv not in blob  # never leak the private key
+    assert "token" not in blob.lower()
+
+
+def test_diagnostics_push_disabled_without_key(env):
+    env.setenv("VAPID_PRIVATE_KEY", "")
+    core.reset_storage_for_tests()
+    assert core.diagnostics()["push"]["configured"] is False
+
+
+def test_diagnostics_surfaces_vercel_markers(env, monkeypatch):
+    monkeypatch.setenv("VERCEL_ENV", "production")
+    monkeypatch.setenv("VERCEL_GIT_COMMIT_SHA", "abcdef1234567890")
+    monkeypatch.setenv("VERCEL_REGION", "fra1")
+    core.reset_storage_for_tests()
+    d = core.diagnostics()
+    assert d["env"] == "production"
+    assert d["commit"] == "abcdef1"
+    assert d["region"] == "fra1"
+
+
 def test_create_channel_stores_only_hash(env):
     # env fixture clears ALL four storage env vars (KV_* and UPSTASH_*) and
     # resets the singleton in teardown, so this can never touch a real Redis.

@@ -120,6 +120,20 @@ def test_connection_refused_becomes_storage_error():
         st.get_channel("kh")
 
 
+def test_ping_ok(upstash):
+    st = _store(upstash)
+    upstash.responder = lambda call: (200, [{"result": "PONG"}])
+    assert st.ping() is True
+    assert upstash.calls[-1]["body"] == [["PING"]]
+
+
+def test_ping_failure_raises(upstash):
+    st = _store(upstash)
+    upstash.responder = lambda call: (200, [{"error": "boom"}])
+    with pytest.raises(core.StorageError):
+        st.ping()
+
+
 def test_add_message_pipeline_encoding(upstash):
     st = _store(upstash)
     upstash.responder = lambda call: (200, [{"result": 1}, {"result": "OK"}, {"result": 1}])

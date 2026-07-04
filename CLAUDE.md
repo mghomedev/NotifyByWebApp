@@ -46,7 +46,7 @@ codes, get the app URL + QR. Implementation layers (all implemented in notify_pa
 - `api/index.py` — single Vercel entrypoint (`BaseHTTPRequestHandler` named `handler`;
   `pyproject.toml` `[tool.vercel] entrypoint = "api.index:handler"`).
   GET: `/` `/a` `/sw.js` `/vendor/qrcode.js` `/icon.svg` `/icon-192.png` `/icon-512.png`
-  `/apple-touch-icon.png` `/favicon.ico` `/robots.txt` `/api/health`.
+  `/apple-touch-icon.png` `/favicon.ico` `/robots.txt` `/api/health` `/api/status`.
   POST (JSON, code in body): `/api/channel` `/api/subscribe` `/api/unsubscribe`
   `/api/message` `/api/messages`. OPTIONS: CORS preflight for `/api/*`.
 - `notify_core.py` — codes/hashing, validation, rate limiter, storage backends, push.
@@ -133,6 +133,12 @@ codes, get the app URL + QR. Implementation layers (all implemented in notify_pa
   `Server:` header reveals no Python version.
 - CORS `*` on `/api` (the code IS the auth; enables third-party browser senders); the
   hand-built 429 responses also carry CORS.
+- `GET /api/status` = **secret-gated** diagnostics (`NBW_STATUS_SECRET` via
+  `Authorization: Bearer <secret>` header or `?key=<secret>`, constant-time compare):
+  reports push-configured?, storage backend + live ping reachability, deployed
+  commit/env/region (from `VERCEL_*`), and config limits. Returns NO secret values.
+  Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
+  Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
 ## Tests (pytest; must be green before every deploy) — 124 tests
 

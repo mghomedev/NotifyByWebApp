@@ -83,6 +83,11 @@ def vapid_config() -> "tuple[str, str, str]":
     )
 
 
+def status_secret() -> str:
+    """Shared secret that gates GET /api/status. Empty → diagnostics disabled."""
+    return os.environ.get("NBW_STATUS_SECRET", "").strip()
+
+
 class StorageError(Exception):
     """The persistent store is unreachable or returned an error."""
 
@@ -342,6 +347,9 @@ class MemoryStorage:
     def touch(self, kh: str, ttl: int) -> None:
         pass
 
+    def ping(self) -> bool:
+        return True
+
 
 class RedisStorage:
     """Upstash Redis over its REST API (works well from serverless — no
@@ -440,6 +448,9 @@ class RedisStorage:
             ]
         )
 
+    def ping(self) -> bool:
+        return self._pipeline([["PING"]])[0] == "PONG"
+
 
 _storage = None
 _storage_lock = threading.Lock()
@@ -466,6 +477,43 @@ def reset_storage_for_tests() -> None:
     global _storage
     with _storage_lock:
         _storage = None
+
+
+def storage_status() -> dict:
+    """Which storage backend is active and whether it answers a live ping.
+    Never raises — an unreachable store reports reachable: false."""
+    storage = get_storage()
+    backend = "redis" if isinstance(storage, RedisStorage) else "memory"
+    try:
+        reachable = bool(storage.ping())
+    except StorageError:
+        reachable = False
+    return {"backend": backend, "reachable": reachable}
+
+
+def diagnostics() -> dict:
+    """Operational status for GET /api/status. Reports config presence and
+    live storage reachability but NEVER any secret value (no VAPID keys, no
+    storage URL/token) and no per-channel data."""
+    private_key, public_key, _subject = vapid_config()
+    store = storage_status()
+    commit = (os.environ.get("VERCEL_GIT_COMMIT_SHA") or "")[:7] or None
+    return {
+        "ok": store["reachable"],
+        "service": "notify-by-web-app",
+        "env": os.environ.get("VERCEL_ENV") or "local",
+        "commit": commit,
+        "region": os.environ.get("VERCEL_REGION") or None,
+        "push": {"configured": bool(private_key and public_key)},
+        "storage": store,
+        "limits": {
+            "rate_per_min": rate_per_min(),
+            "max_channels_per_min": max_channels_per_min(),
+            "max_subs_per_channel": max_subs_per_channel(),
+            "max_messages": max_messages(),
+            "channel_ttl_days": channel_ttl_seconds() // 86400,
+        },
+    }
 
 
 # ------------------------------------------------------ domain operations

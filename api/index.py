@@ -6,10 +6,12 @@ cannot end up in platform request logs.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler
+from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -142,6 +144,25 @@ class handler(BaseHTTPRequestHandler):
             return None
         return code
 
+    def _status(self) -> None:
+        """Secret-gated operational diagnostics. Provide the secret via an
+        `Authorization: Bearer <secret>` header (preferred — stays out of
+        URLs/logs) or a `?key=<secret>` query param."""
+        secret = core.status_secret()
+        if not secret:
+            self._error(404, "not found")  # diagnostics disabled (fail closed)
+            return
+        provided = ""
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            provided = auth[7:].strip()
+        if not provided:
+            provided = parse_qs(urlparse(self.path).query).get("key", [""])[0]
+        if not (provided and hmac.compare_digest(provided, secret)):
+            self._error(401, "unauthorized")
+            return
+        self._json(200, core.diagnostics())
+
     # -------------------------------------------------------------- GET
 
     def do_GET(self):  # noqa: N802 (stdlib naming)
@@ -183,6 +204,8 @@ class handler(BaseHTTPRequestHandler):
                 self._send(200, pages.ROBOTS_TXT, "text/plain; charset=utf-8")
             elif path == "/api/health":
                 self._json(200, {"ok": True})
+            elif path == "/api/status":
+                self._status()
             elif path.startswith("/api/"):
                 self._error(404, "not found")
             else:

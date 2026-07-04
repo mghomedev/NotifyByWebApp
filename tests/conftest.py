@@ -36,6 +36,7 @@ def _test_vapid_pair():
 
 
 TEST_VAPID_PRIVATE, TEST_VAPID_PUBLIC = _test_vapid_pair()
+TEST_STATUS_SECRET = "test-status-secret-xyz"
 
 
 def fake_subscription(n: int = 1) -> dict:
@@ -66,6 +67,9 @@ def env(monkeypatch):
     monkeypatch.setenv("VAPID_PRIVATE_KEY", TEST_VAPID_PRIVATE)
     monkeypatch.setenv("VAPID_PUBLIC_KEY", TEST_VAPID_PUBLIC)
     monkeypatch.setenv("VAPID_SUBJECT", "mailto:test@example.invalid")
+    monkeypatch.setenv("NBW_STATUS_SECRET", TEST_STATUS_SECRET)
+    for var in ("VERCEL_ENV", "VERCEL_GIT_COMMIT_SHA", "VERCEL_REGION"):
+        monkeypatch.delenv(var, raising=False)
     notify_core.reset_storage_for_tests()
     notify_core.limiter = notify_core.RateLimiter()
     yield monkeypatch
