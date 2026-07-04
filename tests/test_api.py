@@ -331,6 +331,19 @@ def test_storage_outage_returns_502(server, monkeypatch):
     assert resp.headers.get("Access-Control-Allow-Origin") == "*"
 
 
+def test_disclaimer_on_both_pages(server):
+    for path in ("/", "/a"):
+        html = server.get(path).raw.decode("utf-8")
+        low = html.lower()
+        assert "no warranty" in low
+        assert "at your own risk" in low
+        assert "open-source" in low and "host their own copy" in low
+        assert "emergency notifications" in low
+        assert 'lang="de"' in html  # German section present
+        assert "Nutzung auf eigene Gefahr" in html
+        assert "__DISCLAIMER__" not in html  # placeholder was substituted
+
+
 def test_service_worker_served_correctly(server):
     resp = server.get("/sw.js")
     assert resp.status == 200

@@ -26,6 +26,37 @@ CSP = (
 
 ROBOTS_TXT = "User-agent: *\nDisallow: /a\nDisallow: /api/\n"
 
+# Shown at the bottom of both the landing page and the app page. Injected via
+# the __DISCLAIMER__ placeholder so the two pages never drift apart.
+DISCLAIMER_HTML = """<div class="disclaimer">
+<p><strong>Free &amp; open-source.</strong> This is free, open-source software
+(MIT-licensed) &mdash; anyone can read, fork and <strong>host their own copy</strong>
+from the public <a href="https://github.com/mghomedev/NotifyByWebApp" rel="noopener">GitHub
+repository</a>. It is a non-commercial hobby project; there is no company, paid service
+or support behind it.</p>
+<p><strong>No warranty &mdash; use entirely at your own risk.</strong> Provided
+<strong>&ldquo;AS IS&rdquo; and &ldquo;AS AVAILABLE&rdquo;</strong>, without warranty
+or condition of any kind, whether express, implied or statutory, including (without
+limitation) any implied warranties of merchantability, fitness for a particular
+purpose, reliability, accuracy, security or availability. Message delivery is
+<strong>not guaranteed</strong> and may be delayed, duplicated, lost or fail entirely,
+and the service may change, break or shut down at any time without notice.</p>
+<p><strong>Do not rely on this service for any urgent, critical, medical, financial,
+safety-related or emergency notifications.</strong> To the maximum extent permitted
+by applicable law, the author and operator shall not be liable for any direct,
+indirect, incidental or consequential loss or damage whatsoever arising from the use
+of, or inability to use, this service. By using it you accept these terms and take
+full responsibility for keeping your channel codes secret.</p>
+<p lang="de"><strong>Freie Open-Source-Software &ndash; Nutzung auf eigene Gefahr.</strong>
+Quelloffenes, kostenloses, nicht-kommerzielles Hobby-Projekt, das jede Person einsehen,
+kopieren und selbst betreiben kann. Bereitgestellt &bdquo;wie besehen&ldquo; ohne
+jegliche Garantie f&uuml;r Verf&uuml;gbarkeit, Zuverl&auml;ssigkeit, Sicherheit oder
+die Zustellung von Nachrichten. Nicht f&uuml;r dringende, kritische, medizinische,
+finanzielle oder sicherheitsrelevante Benachrichtigungen verwenden. Eine Haftung
+f&uuml;r Sch&auml;den ist &ndash; soweit gesetzlich zul&auml;ssig &ndash;
+ausgeschlossen.</p>
+</div>"""
+
 ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
 <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
 <stop offset="0" stop-color="#6366F1"/><stop offset="1" stop-color="#4338CA"/>
@@ -98,6 +129,12 @@ a{color:var(--accent)}
 footer{margin-top:22px;text-align:center}
 .status-ok{color:var(--ok);font-weight:600}
 .err{color:var(--danger);font-size:.9rem;min-height:1.2em}
+.disclaimer{margin-top:12px;padding-top:12px;border-top:1px solid var(--border);
+font-size:.72rem;line-height:1.55;color:var(--muted)}
+.disclaimer p{margin:0 0 8px}
+.disclaimer p:last-child{margin-bottom:0}
+.disclaimer strong{color:var(--text)}
+.disclaimer a{color:var(--accent)}
 """
 
 _HEAD_COMMON = (
@@ -218,8 +255,9 @@ trust.</p>
 <p class="muted" id="save-status"></p>
 </div>
 
-<footer class="muted">Hobby project, no warranty &middot;
+<footer class="muted">Free &amp; open-source hobby project &middot;
 <a href="https://github.com/mghomedev/NotifyByWebApp" rel="noopener">Source on GitHub</a></footer>
+__DISCLAIMER__
 </div>
 <script src="/vendor/qrcode.js"></script>
 <script>
@@ -384,6 +422,7 @@ No channels yet — paste a channel code above, or create one on the
 <a href="/">start page</a>.
 </div>
 <footer class="muted"><a href="/">Notify start page</a></footer>
+__DISCLAIMER__
 </div>
 <script>
 (function(){
@@ -751,9 +790,13 @@ body:JSON.stringify({code:code,subscription:body})}).catch(function(){})}))})})
 
 
 def index_html() -> str:
-    return INDEX_HTML
+    return INDEX_HTML.replace("__DISCLAIMER__", DISCLAIMER_HTML)
 
 
 def app_html(vapid_public_key: str) -> str:
     key = re.sub(r"[^A-Za-z0-9_-]", "", vapid_public_key or "")
-    return _APP_HTML_TEMPLATE.replace("__VAPID_PUBLIC_KEY__", key)
+    return (
+        _APP_HTML_TEMPLATE.replace("__VAPID_PUBLIC_KEY__", key).replace(
+            "__DISCLAIMER__", DISCLAIMER_HTML
+        )
+    )
