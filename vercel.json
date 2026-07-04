@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["fra1"],
   "functions": {
     "api/**/*.py": {
       "excludeFiles": "{tests/**,scripts/**,requirements-dev.txt,pytest.ini,**/test_*.py,**/*.test.py}"
