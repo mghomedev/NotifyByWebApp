@@ -32,6 +32,11 @@ https://github.com/mghomedev/NotifyByWebApp
   otherwise); subscribing and receiving stay open to anyone holding the code. Channel
   snapshots expose `send_protected` so the send UIs show a password field only when needed.
   `/api/channel` accepts `send_password` (min 4, max 128); `/api/message` accepts it too.
+- **Deleting messages**: `/api/message/delete` (one, by message `id`) and
+  `/api/messages/clear` (all) — gated by the same send-password when the channel is
+  protected (`_require_send_password`, shared with publish). The app page shows a trash
+  icon per message and a clear-all trash in the message header; on a protected channel the
+  UI reuses the send-password field or prompts for it.
 
 ## Install-URL trick (core UX idea — the app URL carries the channel codes)
 
@@ -56,7 +61,8 @@ codes, get the app URL + QR. Implementation layers (all implemented in notify_pa
   GET: `/` `/a` `/sw.js` `/vendor/qrcode.js` `/icon.svg` `/icon-192.png` `/icon-512.png`
   `/apple-touch-icon.png` `/favicon.ico` `/robots.txt` `/api/health` `/api/status`.
   POST (JSON, code in body): `/api/channel` `/api/subscribe` `/api/unsubscribe`
-  `/api/message` `/api/messages`. OPTIONS: CORS preflight for `/api/*`.
+  `/api/message` `/api/message/delete` (by `id`) `/api/messages` `/api/messages/clear`.
+  OPTIONS: CORS preflight for `/api/*`.
 - `notify_core.py` — codes/hashing, validation, rate limiter, storage backends, push.
 - `notify_pages.py` — landing + app HTML/JS, service worker, CSP, icon SVG, robots.
 - `notify_icons.py` / `notify_vendor.py` — base64-embedded PNGs / vendored

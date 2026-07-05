@@ -244,8 +244,12 @@ class handler(BaseHTTPRequestHandler):
                 self._post_unsubscribe(payload)
             elif path == "/api/message":
                 self._post_message(payload)
+            elif path == "/api/message/delete":
+                self._post_message_delete(payload)
             elif path == "/api/messages":
                 self._post_messages(payload)
+            elif path == "/api/messages/clear":
+                self._post_messages_clear(payload)
             else:
                 self._error(404, "not found")
         except (ConnectionError, BrokenPipeError, TimeoutError):
@@ -321,6 +325,28 @@ class handler(BaseHTTPRequestHandler):
             self._error(404, "unknown channel")
             return
         self._json(200, {"ok": True, **result})
+
+    def _post_message_delete(self, payload: dict) -> None:
+        code = self._get_code(payload)
+        if code is None:
+            return
+        result = core.delete_message(
+            code, payload.get("id"), payload.get("send_password")
+        )
+        if result is None:
+            self._error(404, "unknown channel")
+            return
+        self._json(200, {"ok": True, "removed": result})
+
+    def _post_messages_clear(self, payload: dict) -> None:
+        code = self._get_code(payload)
+        if code is None:
+            return
+        result = core.clear_messages(code, payload.get("send_password"))
+        if result is None:
+            self._error(404, "unknown channel")
+            return
+        self._json(200, {"ok": True, "cleared": True})
 
     def _post_messages(self, payload: dict) -> None:
         code = self._get_code(payload)

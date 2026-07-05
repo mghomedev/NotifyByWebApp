@@ -120,8 +120,13 @@ padding:10px 12px;margin:8px 0;word-break:break-all;user-select:all}
 .qrshare svg{display:block;width:168px;height:168px}
 .share-url{font-size:.76rem;text-align:left;margin:10px 0 0}
 .msgs{margin-top:8px}
-.msg{border-top:1px solid var(--border);padding:10px 0}
+.msg{border-top:1px solid var(--border);padding:10px 30px 10px 0;position:relative}
 .msg:first-child{border-top:0}
+.msgs-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}
+.iconbtn{background:transparent;border:0;cursor:pointer;font-size:1rem;line-height:1;
+padding:2px 6px;margin:0;color:var(--muted)}
+.iconbtn:hover{color:var(--danger)}
+.msg-del{position:absolute;top:8px;right:-4px}
 .msg-title{font-weight:600}
 .msg-body{white-space:pre-wrap}
 .msg-time{color:var(--muted);font-size:.78rem;margin-bottom:3px}
@@ -673,6 +678,14 @@ cards.sort(function(a,b){
 return (parseInt(b.getAttribute('data-ts'),10)||0)-(parseInt(a.getAttribute('data-ts'),10)||0)});
 cards.forEach(function(c){wrap.appendChild(c)})}
 
+// password to authorize a delete: use the card's send-password field, and for
+// a protected channel with an empty field, prompt for it
+function deletePw(card){
+var f=card.querySelector('.send-pw');var v=f?f.value:'';
+if(!v&&card.getAttribute('data-protected')==='1'){
+v=prompt('This channel needs its send password to delete messages:')||''}
+return v}
+
 function refreshChannel(code){
 var card=document.querySelector('.channel[data-code="'+code+'"]');
 if(!card)return;
@@ -682,15 +695,34 @@ card.querySelector('h2').textContent=cname;
 var _sc=card.querySelector('.share-channel');
 if(_sc)_sc.textContent='for Channel: '+cname;
 var prot=!!(j.channel&&j.channel.send_protected);
+card.setAttribute('data-protected',prot?'1':'0');
 var _pw=card.querySelector('.send-pw');if(_pw)_pw.hidden=!prot;
 var _sum=card.querySelector('details summary');
 if(_sum)_sum.textContent=prot?'Send a message (password required)':'Send a message';
 card.querySelector('.stats').textContent=j.subscribers+' subscribed device(s)';
 var msgs=card.querySelector('.msgs');msgs.textContent='';
 if(!j.messages.length){msgs.appendChild(el('div','muted','No messages yet.'))}
-else if(j.messages.length>1){msgs.appendChild(el('div','msgs-hint','Newest first'))}
+else{
+var hdr=el('div','msgs-hdr');
+hdr.appendChild(el('span','msgs-hint',j.messages.length>1?'Newest first':''));
+var clr=el('button','iconbtn','\\uD83D\\uDDD1');
+clr.title='Delete all messages';clr.setAttribute('aria-label','Delete all messages');
+clr.addEventListener('click',function(){
+if(!confirm('Delete ALL messages in this channel? This cannot be undone.'))return;
+api('/api/messages/clear',{code:code,send_password:deletePw(card)})
+.then(function(){refreshChannel(code)})
+.catch(function(e){alert((e&&e.status===403)?'Wrong or missing send password.':'Could not delete messages.')})});
+hdr.appendChild(clr);msgs.appendChild(hdr)}
 j.messages.forEach(function(m){
 var d=el('div','msg');
+var del=el('button','iconbtn msg-del','\\uD83D\\uDDD1');
+del.title='Delete this message';del.setAttribute('aria-label','Delete this message');
+del.addEventListener('click',function(){
+if(!confirm('Delete this message?'))return;
+api('/api/message/delete',{code:code,id:m.id,send_password:deletePw(card)})
+.then(function(){refreshChannel(code)})
+.catch(function(e){alert((e&&e.status===403)?'Wrong or missing send password.':'Could not delete message.')})});
+d.appendChild(del);
 var t=fmtTime(m.ts);
 var time=el('div','msg-time',t.abs);
 time.appendChild(el('span','msg-rel',' \\u00b7 '+t.rel));

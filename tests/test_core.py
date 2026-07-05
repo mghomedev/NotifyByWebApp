@@ -294,6 +294,18 @@ def test_memory_storage_message_cap_and_order():
     assert st.get_messages("missing", 5) == []
 
 
+def test_memory_storage_delete_and_clear():
+    st = core.MemoryStorage()
+    st.create_channel("kh", "{}")
+    st.add_message("kh", '{"id":"a"}', 50)
+    st.add_message("kh", '{"id":"b"}', 50)
+    assert st.delete_message("kh", "a") is True
+    assert st.delete_message("kh", "a") is False  # already gone
+    assert [core._msg_id_of(m) for m in st.get_messages("kh", 10)] == ["b"]
+    assert st.clear_messages("kh") == 1
+    assert st.get_messages("kh", 10) == []
+
+
 class FakeRedis(core.RedisStorage):
     def __init__(self, responses):
         super().__init__("https://fake.example.invalid", "token")
@@ -448,3 +460,39 @@ def test_snapshot_reports_send_protected(env):
     openc = core.create_channel("O")["code"]
     assert core.channel_snapshot(prot, 5)["channel"]["send_protected"] is True
     assert core.channel_snapshot(openc, 5)["channel"]["send_protected"] is False
+
+
+def test_delete_and_clear_messages(env):
+    core.reset_storage_for_tests()
+    code = core.create_channel("C")["code"]
+    id1 = core.publish(code, core.validate_message({"title": "one"}))["message"]["id"]
+    core.publish(code, core.validate_message({"title": "two"}))
+    assert len(core.channel_snapshot(code, 10)["messages"]) == 2
+    assert core.delete_message(code, id1) is True
+    assert [m["title"] for m in core.channel_snapshot(code, 10)["messages"]] == ["two"]
+    assert core.delete_message(code, "nonexistent") is False
+    assert core.clear_messages(code) is True
+    assert core.channel_snapshot(code, 10)["messages"] == []
+
+
+def test_delete_message_bad_id_and_unknown_channel(env):
+    core.reset_storage_for_tests()
+    code = core.create_channel("C")["code"]
+    with pytest.raises(ValueError):
+        core.delete_message(code, "")
+    ghost = core.generate_code()
+    assert core.delete_message(ghost, "x") is None
+    assert core.clear_messages(ghost) is None
+
+
+def test_delete_requires_password_on_protected_channel(env):
+    core.reset_storage_for_tests()
+    code = core.create_channel("P", send_password="phrase-key")["code"]
+    mid = core.publish(
+        code, core.validate_message({"title": "x"}), "phrase-key"
+    )["message"]["id"]
+    with pytest.raises(core.SendForbidden):
+        core.delete_message(code, mid)
+    with pytest.raises(core.SendForbidden):
+        core.clear_messages(code)
+    assert core.delete_message(code, mid, "phrase-key") is True

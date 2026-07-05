@@ -217,6 +217,25 @@ def test_app_page_sorts_channels_by_latest_event(server, page):
     assert latest.startswith("Latest:")
 
 
+def test_app_page_delete_message_and_clear_all(server, page, channel):
+    expect = playwright_api.expect
+    server.post("/api/message", {"code": channel, "title": "First"})
+    server.post("/api/message", {"code": channel, "title": "Second"})
+    page.goto(server.base + "/a#codes=" + channel)
+    expect(page.locator(".channel .msg")).to_have_count(2)
+
+    # delete the newest message via its trash icon (page fixture auto-accepts confirm)
+    page.locator(".channel .msg-del").first.click()
+    page.wait_for_selector(".channel .msg-title:has-text('Second')", state="detached")
+    expect(page.locator(".channel .msg")).to_have_count(1)
+    assert page.locator(".channel .msg-title").first.text_content() == "First"
+
+    # clear all remaining messages via the header trash
+    page.locator(".channel .msgs-hdr .iconbtn").click()
+    page.wait_for_selector(".channel .msgs:has-text('No messages yet')")
+    expect(page.locator(".channel .msg")).to_have_count(0)
+
+
 def test_unknown_code_shows_friendly_error(server, page):
     page.goto(server.base + "/a#codes=this_code_does_not_exist_123456")
     page.wait_for_selector(".channel h2:has-text('Unknown channel')")

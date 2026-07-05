@@ -113,6 +113,39 @@ def test_create_channel_rejects_short_send_password(server):
 # ------------------------------------------------------- error handling
 
 
+def test_delete_and_clear_messages_via_api(server, channel):
+    id1 = server.post("/api/message", {"code": channel, "title": "one"}).json["message"]["id"]
+    server.post("/api/message", {"code": channel, "title": "two"})
+    assert len(server.post("/api/messages", {"code": channel}).json["messages"]) == 2
+    resp = server.post("/api/message/delete", {"code": channel, "id": id1})
+    assert resp.status == 200 and resp.json["removed"] is True
+    titles = [m["title"] for m in server.post("/api/messages", {"code": channel}).json["messages"]]
+    assert titles == ["two"]
+    assert server.post("/api/messages/clear", {"code": channel}).status == 200
+    assert server.post("/api/messages", {"code": channel}).json["messages"] == []
+
+
+def test_delete_message_bad_id_is_400(server, channel):
+    assert server.post("/api/message/delete", {"code": channel, "id": ""}).status == 400
+    assert server.post("/api/message/delete", {"code": channel}).status == 400
+
+
+def test_delete_on_protected_channel_needs_password(server):
+    code = server.post(
+        "/api/channel", {"name": "P", "send_password": "key-phrase"}
+    ).json["code"]
+    mid = server.post(
+        "/api/message", {"code": code, "title": "x", "send_password": "key-phrase"}
+    ).json["message"]["id"]
+    assert server.post("/api/message/delete", {"code": code, "id": mid}).status == 403
+    assert server.post("/api/messages/clear", {"code": code}).status == 403
+    ok = server.post(
+        "/api/message/delete",
+        {"code": code, "id": mid, "send_password": "key-phrase"},
+    )
+    assert ok.status == 200 and ok.json["removed"] is True
+
+
 def test_unknown_channel_is_404(server):
     ghost = core.generate_code()
     assert server.post("/api/messages", {"code": ghost}).status == 404

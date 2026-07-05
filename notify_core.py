@@ -170,6 +170,23 @@ def _send_password_hash(pw: str) -> str:
     return hashlib.sha256(pw.encode("utf-8")).hexdigest()
 
 
+def _require_send_password(meta: dict, send_password: object) -> None:
+    """Raise SendForbidden unless the channel is unprotected or the password
+    matches. Used for every mutating channel operation (send/delete/clear)."""
+    required = meta.get("send_pw")
+    if required:
+        provided = send_password if isinstance(send_password, str) else ""
+        if not hmac.compare_digest(_send_password_hash(provided), required):
+            raise SendForbidden()
+
+
+def _msg_id_of(raw: str) -> "str | None":
+    try:
+        return json.loads(raw).get("id")
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return None
+
+
 def _derive_title(body: str) -> str:
     """Make a title from the body's first line when none was given."""
     first = body.split("\n", 1)[0].strip() or body.strip()
@@ -385,6 +402,24 @@ class MemoryStorage:
             e = self._entry(kh)
             return list(e["msgs"][:limit]) if e else []
 
+    def delete_message(self, kh: str, msg_id: str) -> bool:
+        with self._lock:
+            e = self._entry(kh)
+            if not e:
+                return False
+            before = len(e["msgs"])
+            e["msgs"] = [m for m in e["msgs"] if _msg_id_of(m) != msg_id]
+            return len(e["msgs"]) < before
+
+    def clear_messages(self, kh: str) -> int:
+        with self._lock:
+            e = self._entry(kh)
+            if not e:
+                return 0
+            n = len(e["msgs"])
+            e["msgs"] = []
+            return n
+
     def touch(self, kh: str, ttl: int) -> None:
         pass
 
@@ -478,6 +513,17 @@ class RedisStorage:
             self._pipeline([["LRANGE", self._k("msgs", kh), "0", str(limit - 1)]])[0]
             or []
         )
+
+    def delete_message(self, kh: str, msg_id: str) -> bool:
+        # find the exact stored JSON for this id, then remove that value
+        for raw in self.get_messages(kh, 1000):
+            if _msg_id_of(raw) == msg_id:
+                res = self._pipeline([["LREM", self._k("msgs", kh), "0", raw]])
+                return bool(res[0])
+        return False
+
+    def clear_messages(self, kh: str) -> int:
+        return int(self._pipeline([["DEL", self._k("msgs", kh)]])[0] or 0)
 
     def touch(self, kh: str, ttl: int) -> None:
         t = str(ttl)
@@ -641,6 +687,33 @@ def unsubscribe(code: str, endpoint: object) -> "bool | None":
     return storage.delete_sub(kh, endpoint_hash(endpoint))
 
 
+def delete_message(code: str, msg_id: object, send_password: object = None) -> "bool | None":
+    """Delete one stored message by id. None for unknown channels. Raises
+    ValueError (bad id) / SendForbidden (protected channel, wrong password)."""
+    if not isinstance(msg_id, str) or not msg_id:
+        raise ValueError("message id is required")
+    storage = get_storage()
+    kh = code_hash(code)
+    meta_json = storage.get_channel(kh)
+    if meta_json is None:
+        return None
+    _require_send_password(_load_stored(meta_json), send_password)
+    return storage.delete_message(kh, msg_id)
+
+
+def clear_messages(code: str, send_password: object = None) -> "bool | None":
+    """Delete all stored messages for a channel. None for unknown channels.
+    Raises SendForbidden for a protected channel with a wrong password."""
+    storage = get_storage()
+    kh = code_hash(code)
+    meta_json = storage.get_channel(kh)
+    if meta_json is None:
+        return None
+    _require_send_password(_load_stored(meta_json), send_password)
+    storage.clear_messages(kh)
+    return True
+
+
 def _truncate_utf8(text: str, max_bytes: int) -> str:
     encoded = text.encode("utf-8")
     if len(encoded) <= max_bytes:
@@ -658,12 +731,7 @@ def publish(code: str, message: dict, send_password: object = None) -> "dict | N
     if meta_json is None:
         return None
     meta = _load_stored(meta_json)
-
-    required = meta.get("send_pw")
-    if required:
-        provided = send_password if isinstance(send_password, str) else ""
-        if not hmac.compare_digest(_send_password_hash(provided), required):
-            raise SendForbidden()
+    _require_send_password(meta, send_password)
 
     msg = {
         "id": secrets.token_hex(4),

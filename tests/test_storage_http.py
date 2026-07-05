@@ -134,6 +134,30 @@ def test_ping_failure_raises(upstash):
         st.ping()
 
 
+def test_delete_message_finds_and_lrems_exact_value(upstash):
+    st = _store(upstash)
+    msgs = ['{"id":"a","t":"A"}', '{"id":"b","t":"B"}']
+    seq = iter([(200, [{"result": msgs}]), (200, [{"result": 1}])])
+    upstash.responder = lambda call: next(seq)
+    assert st.delete_message("kh", "b") is True
+    lrem = upstash.calls[-1]["body"][0]
+    assert lrem[:2] == ["LREM", "nbw:msgs:kh"]
+    assert lrem[3] == '{"id":"b","t":"B"}'  # exact stored string
+
+
+def test_delete_message_not_found(upstash):
+    st = _store(upstash)
+    upstash.responder = lambda call: (200, [{"result": ['{"id":"a"}']}])
+    assert st.delete_message("kh", "zzz") is False
+
+
+def test_clear_messages_uses_del(upstash):
+    st = _store(upstash)
+    upstash.responder = lambda call: (200, [{"result": 1}])
+    assert st.clear_messages("kh") == 1
+    assert upstash.calls[-1]["body"] == [["DEL", "nbw:msgs:kh"]]
+
+
 def test_add_message_pipeline_encoding(upstash):
     st = _store(upstash)
     upstash.responder = lambda call: (200, [{"result": 1}, {"result": "OK"}, {"result": 1}])
