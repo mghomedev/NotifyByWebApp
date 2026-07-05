@@ -22,8 +22,16 @@ https://github.com/mghomedev/NotifyByWebApp
 - **Subscriber** = Web Push subscription (endpoint + p256dh/auth keys), stored per channel
   keyed by `sha256(endpoint)`. One push subscription per install; server maps
   channel → endpoints.
-- **Message** = title (≤120) + body (≤2000) + optional http(s) url (≤500); stored per
-  channel (newest first, capped at `NBW_MAX_MESSAGES`=50) and pushed to all subscribers.
+- **Message** = optional title (≤120) + optional body (≤2000) + optional http(s) url
+  (≤500). At least one of title/body is required; a missing title is derived from the
+  body's first line (first `TITLE_SNIPPET`=60 chars + "…"). Stored per channel (newest
+  first, capped at `NBW_MAX_MESSAGES`=50) and pushed to all subscribers.
+- **Send-password (optional)**: a channel may set a send-password at creation; only its
+  `sha256` hash is stored in the channel meta (`send_pw`) — never the raw phrase. When set,
+  publishing requires the matching password (constant-time compare → `SendForbidden`/403
+  otherwise); subscribing and receiving stay open to anyone holding the code. Channel
+  snapshots expose `send_protected` so the send UIs show a password field only when needed.
+  `/api/channel` accepts `send_password` (min 4, max 128); `/api/message` accepts it too.
 
 ## Install-URL trick (core UX idea — the app URL carries the channel codes)
 
