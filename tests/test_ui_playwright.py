@@ -132,6 +132,23 @@ def test_app_page_shows_shareable_qr(server, page, channel):
     page.wait_for_selector(".channel .share-channel:has-text('Test Channel')")
 
 
+def test_app_page_message_order_and_local_timestamps(server, page, channel):
+    server.post("/api/message", {"code": channel, "title": "First", "body": "1"})
+    server.post("/api/message", {"code": channel, "title": "Second", "body": "2"})
+    page.goto(server.base + "/a#codes=" + channel)
+    page.wait_for_selector(".channel .msg-title")
+    titles = page.eval_on_selector_all(
+        ".channel .msg-title", "els => els.map(e => e.textContent)"
+    )
+    assert titles[0] == "Second" and titles[1] == "First"  # newest on top
+    # every message shows a (non-empty) timestamp and a "newest first" hint
+    times = page.eval_on_selector_all(
+        ".channel .msg-time", "els => els.map(e => e.textContent.trim())"
+    )
+    assert len(times) >= 2 and all(times)
+    assert page.query_selector(".channel .msgs-hint") is not None
+
+
 def test_app_page_persists_codes_without_fragment(server, page, channel):
     page.goto(server.base + "/a#codes=" + channel)
     page.wait_for_selector(".channel h2:has-text('Test Channel')")

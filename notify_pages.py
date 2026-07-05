@@ -124,7 +124,10 @@ padding:10px 12px;margin:8px 0;word-break:break-all;user-select:all}
 .msg:first-child{border-top:0}
 .msg-title{font-weight:600}
 .msg-body{white-space:pre-wrap}
-.msg-time{color:var(--muted);font-size:.8rem}
+.msg-time{color:var(--muted);font-size:.78rem;margin-bottom:3px}
+.msg-rel{opacity:.85}
+.msgs-hint{font-size:.72rem;color:var(--muted);text-align:right;margin-bottom:2px}
+.msg-link{margin-top:3px;font-size:.85rem}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
 .codes-item{display:flex;align-items:center;gap:8px;margin:6px 0}
 .codes-item span{font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all;flex:1}
@@ -575,6 +578,18 @@ var ok=oks.filter(Boolean).length;
 updateNotifUI(ok===0?'subfail':(ok<codes.length?'partial':'on'));
 return ok>0})})})}
 
+// ------- messages
+function fmtTime(ts){
+var dt=new Date(ts*1000);
+var abs=dt.toLocaleString([],{year:'numeric',month:'short',day:'numeric',
+hour:'2-digit',minute:'2-digit'});
+var diff=Math.floor((Date.now()-dt.getTime())/1000);var rel;
+if(diff<60)rel='just now';
+else if(diff<3600)rel=Math.floor(diff/60)+' min ago';
+else if(diff<86400)rel=Math.floor(diff/3600)+' h ago';
+else rel=Math.floor(diff/86400)+' d ago';
+return{abs:abs,rel:rel}}
+
 // ------- channels UI
 function channelCard(code){
 var card=el('div','card channel');card.setAttribute('data-code',code);
@@ -648,16 +663,20 @@ if(_sc)_sc.textContent='for Channel: '+cname;
 card.querySelector('.stats').textContent=j.subscribers+' subscribed device(s)';
 var msgs=card.querySelector('.msgs');msgs.textContent='';
 if(!j.messages.length){msgs.appendChild(el('div','muted','No messages yet.'))}
+else if(j.messages.length>1){msgs.appendChild(el('div','msgs-hint','Newest first'))}
 j.messages.forEach(function(m){
 var d=el('div','msg');
-d.appendChild(el('div','msg-title',m.title));
+var t=fmtTime(m.ts);
+var time=el('div','msg-time',t.abs);
+time.appendChild(el('span','msg-rel',' \\u00b7 '+t.rel));
+d.appendChild(time);
+if(m.title)d.appendChild(el('div','msg-title',m.title));
 if(m.body)d.appendChild(el('div','msg-body',m.body));
-var meta=el('div','msg-time',new Date(m.ts*1000).toLocaleString());
 if(m.url&&/^https?:\\/\\//.test(m.url)){
-meta.appendChild(document.createTextNode(' \\u00b7 '));
-var a=el('a','','Open link');a.href=m.url;a.target='_blank';
-a.rel='noopener noreferrer';meta.appendChild(a)}
-d.appendChild(meta);msgs.appendChild(d)})
+var lk=el('div','msg-link');
+var a=el('a','','Open link');a.href=m.url;a.target='_blank';a.rel='noopener noreferrer';
+lk.appendChild(a);d.appendChild(lk)}
+msgs.appendChild(d)})
 }).catch(function(e){
 if(e&&e.status===404){
 card.querySelector('h2').textContent='Unknown channel';
