@@ -222,8 +222,8 @@ channel code can send.</p>
 <label for="send-code">Channel code</label>
 <input id="send-code" list="send-code-list" placeholder="Paste or pick a channel code" autocomplete="off">
 <datalist id="send-code-list"></datalist>
-<input id="send-title" maxlength="120" placeholder="Title" autocomplete="off">
-<textarea id="send-body" maxlength="2000" rows="3" placeholder="Message text (optional)"></textarea>
+<input id="send-title" maxlength="120" placeholder="Title (optional)" autocomplete="off">
+<textarea id="send-body" maxlength="2000" rows="3" placeholder="Message text (optional if a title is given)"></textarea>
 <input id="send-url" maxlength="500" placeholder="Link https://… (optional)" autocomplete="off">
 <button id="send-btn">Send message</button>
 <p class="err" id="send-error"></p>
@@ -348,7 +348,7 @@ $('#send-btn').addEventListener('click',function(){
 var code=$('#send-code').value.trim(),title=$('#send-title').value.trim();
 var err=$('#send-error'),ok=$('#send-ok');err.textContent='';ok.hidden=true;
 if(!CODE_RE.test(code)){err.textContent='Enter a valid channel code (create one above, or paste it).';return}
-if(!title){err.textContent='Enter a title.';return}
+if(!title&&!$('#send-body').value.trim()){err.textContent='Enter a title or a message.';return}
 var btn=this;btn.disabled=true;
 api('/api/message',{code:code,title:title,body:$('#send-body').value,url:$('#send-url').value})
 .then(function(j){
@@ -616,13 +616,14 @@ share.appendChild(scopy);
 card.appendChild(share);
 var d=document.createElement('details');
 d.appendChild(el('summary','','Send a message'));
-var ti=el('input');ti.placeholder='Title';ti.maxLength=120;
-var bo=document.createElement('textarea');bo.placeholder='Message (optional)';
+var ti=el('input');ti.placeholder='Title (optional)';ti.maxLength=120;
+var bo=document.createElement('textarea');bo.placeholder='Message (optional if a title is given)';
 bo.maxLength=2000;bo.rows=3;
 var ur=el('input');ur.placeholder='Link https://\\u2026 (optional)';ur.maxLength=500;
 var se=el('button','','Send');
 var serr=el('div','muted');
 se.addEventListener('click',function(){
+if(!ti.value.trim()&&!bo.value.trim()){serr.textContent='Enter a title or a message.';return}
 se.disabled=true;serr.textContent='';
 api('/api/message',{code:code,title:ti.value,body:bo.value,url:ur.value})
 .then(function(j){

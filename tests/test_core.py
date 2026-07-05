@@ -69,6 +69,32 @@ def test_validate_message_full():
     assert msg["url"] == "https://example.com/x"
 
 
+def test_message_title_optional_short_body_becomes_title():
+    m = core.validate_message({"body": "Kickoff at 10am, bring cleats"})
+    assert m["title"] == "Kickoff at 10am, bring cleats"
+    assert m["body"] == "Kickoff at 10am, bring cleats"
+
+
+def test_message_title_derived_and_truncated_from_long_body():
+    body = "word " * 60  # 300 chars
+    m = core.validate_message({"body": body})
+    assert m["title"].endswith("…")
+    assert len(m["title"]) <= core.TITLE_SNIPPET + 2
+    assert m["body"] == body.strip()
+
+
+def test_message_title_derived_from_first_line():
+    m = core.validate_message({"body": "Line one\nLine two\nLine three"})
+    assert m["title"] == "Line one"
+    assert m["body"] == "Line one\nLine two\nLine three"
+
+
+def test_message_requires_title_or_body():
+    for payload in [{}, {"title": ""}, {"title": "   "}, {"body": "  "}, {"title": "", "body": ""}]:
+        with pytest.raises(ValueError):
+            core.validate_message(payload)
+
+
 def test_validate_message_strips_control_chars():
     msg = core.validate_message({"title": "a\x00b\x1fc", "body": "x\rY\nz\x00"})
     assert msg["title"] == "abc"

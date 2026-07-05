@@ -112,13 +112,21 @@ def test_bad_bodies_are_400(server):
 
 
 def test_message_validation_via_api(server, channel):
-    assert server.post("/api/message", {"code": channel}).status == 400
+    assert server.post("/api/message", {"code": channel}).status == 400  # no title/body
     assert (
         server.post(
             "/api/message", {"code": channel, "title": "x", "url": "ftp://x.example"}
         ).status
         == 400
     )
+
+
+def test_message_body_only_derives_title(server, channel):
+    resp = server.post("/api/message", {"code": channel, "body": "Kickoff at 10am"})
+    assert resp.status == 200
+    snap = server.post("/api/messages", {"code": channel}).json
+    assert snap["messages"][0]["title"] == "Kickoff at 10am"
+    assert snap["messages"][0]["body"] == "Kickoff at 10am"
 
 
 def test_subscription_validation_via_api(server, channel):

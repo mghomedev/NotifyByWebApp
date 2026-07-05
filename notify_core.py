@@ -34,6 +34,7 @@ B64ISH_RE = re.compile(r"^[A-Za-z0-9+/_=-]{10,400}$")
 
 MAX_NAME = 80
 MAX_TITLE = 120
+TITLE_SNIPPET = 60  # chars taken from the body when no title is given
 MAX_BODY = 2000
 MAX_URL = 500
 MAX_ENDPOINT = 1000
@@ -144,14 +145,24 @@ def clean_channel_name(name: object) -> str:
     return name
 
 
+def _derive_title(body: str) -> str:
+    """Make a title from the body's first line when none was given."""
+    first = body.split("\n", 1)[0].strip() or body.strip()
+    if len(first) <= TITLE_SNIPPET:
+        return first
+    return first[:TITLE_SNIPPET].rstrip() + "…"
+
+
 def validate_message(payload: dict) -> dict:
-    """Returns {"title","body","url"} or raises ValueError."""
-    title = payload.get("title")
+    """Returns {"title","body","url"} or raises ValueError. The title is
+    optional: if omitted, one is derived from the body. At least one of
+    title/body must be present."""
+    title = payload.get("title", "")
+    if title is None:
+        title = ""
     if not isinstance(title, str):
-        raise ValueError("title is required")
+        raise ValueError("title must be a string")
     title = _clean_text(title).strip()
-    if not title:
-        raise ValueError("title is required")
     if len(title) > MAX_TITLE:
         raise ValueError(f"title too long (max {MAX_TITLE} characters)")
 
@@ -163,6 +174,11 @@ def validate_message(payload: dict) -> dict:
     body = _clean_text(body, allow_newlines=True).strip()
     if len(body) > MAX_BODY:
         raise ValueError(f"body too long (max {MAX_BODY} characters)")
+
+    if not title and not body:
+        raise ValueError("a title or a message body is required")
+    if not title:
+        title = _derive_title(body)
 
     url = payload.get("url", "")
     if url is None:
