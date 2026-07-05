@@ -113,7 +113,9 @@ padding:10px 12px;margin:8px 0;word-break:break-all;user-select:all}
 #qr{margin:12px 0;background:#fff;border-radius:10px;padding:8px;display:inline-block}
 #qr svg{display:block;width:200px;height:200px}
 .share{margin:12px 0;padding:14px;border:1px solid var(--border);border-radius:12px;text-align:center}
-.share-label{font-weight:600;margin-bottom:8px}
+.share-label{margin-bottom:8px;text-align:center}
+.share-app{font-weight:700}
+.share-channel{font-size:.88rem;color:var(--muted)}
 .qrshare{background:#fff;border-radius:10px;padding:8px;display:inline-block}
 .qrshare svg{display:block;width:168px;height:168px}
 .share-url{font-size:.76rem;text-align:left;margin:10px 0 0}
@@ -204,6 +206,7 @@ On your phone: open the link (or scan the QR code), then use
 <button class="ghost" data-copy="#app-url">Copy link</button>
 <a id="open-app" class="btn">Open app</a>
 </div>
+<div class="share-label"><div class="share-app">Join NotifyByWebApp</div></div>
 <div id="qr"></div>
 <p class="muted">Scan with your phone camera &rarr; opens the app &rarr; Add to Home Screen.</p>
 </div>
@@ -581,7 +584,10 @@ card.appendChild(el('div','msgs'));
 // always-visible shareable QR for this channel
 var share=el('div','share');
 var shareUrl=location.origin+'/a#codes='+encodeURIComponent(code);
-share.appendChild(el('div','share-label','Share this channel'));
+var slabel=el('div','share-label');
+slabel.appendChild(el('div','share-app','Join NotifyByWebApp'));
+slabel.appendChild(el('div','share-channel','for Channel: \\u2026'));
+share.appendChild(slabel);
 var qrbox=el('div','qrshare');
 try{var qr=qrcode(0,'M');qr.addData(shareUrl);qr.make();
 qrbox.innerHTML=qr.createSvgTag({cellSize:3,margin:2,scalable:true})}catch(e){}
@@ -635,7 +641,10 @@ function refreshChannel(code){
 var card=document.querySelector('.channel[data-code="'+code+'"]');
 if(!card)return;
 api('/api/messages',{code:code,limit:20}).then(function(j){
-card.querySelector('h2').textContent=j.channel.name||'Unnamed channel';
+var cname=j.channel.name||'Unnamed channel';
+card.querySelector('h2').textContent=cname;
+var _sc=card.querySelector('.share-channel');
+if(_sc)_sc.textContent='for Channel: '+cname;
 card.querySelector('.stats').textContent=j.subscribers+' subscribed device(s)';
 var msgs=card.querySelector('.msgs');msgs.textContent='';
 if(!j.messages.length){msgs.appendChild(el('div','muted','No messages yet.'))}

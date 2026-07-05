@@ -127,6 +127,9 @@ def test_app_page_shows_shareable_qr(server, page, channel):
     page.wait_for_selector(".channel .qrshare svg")
     share_url = page.text_content(".channel .share-url")
     assert share_url.endswith("/a#codes=" + channel)
+    # the QR graphic is labelled with the app name and the channel name
+    assert "Join NotifyByWebApp" in page.text_content(".channel .share-app")
+    page.wait_for_selector(".channel .share-channel:has-text('Test Channel')")
 
 
 def test_app_page_persists_codes_without_fragment(server, page, channel):
