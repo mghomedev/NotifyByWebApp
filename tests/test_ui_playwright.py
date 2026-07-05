@@ -192,6 +192,31 @@ def test_app_page_send_password_required(server, page):
     page.wait_for_selector(".channel .msg-title:has-text('Hello again')")
 
 
+def test_app_page_sorts_channels_by_latest_event(server, page):
+    import json
+
+    import notify_core as core
+
+    older = server.post("/api/channel", {"name": "Older"}).json["code"]
+    newer = server.post("/api/channel", {"name": "Newer"}).json["code"]
+    # give "Newer" a message with a clearly later timestamp than either creation
+    core.get_storage().add_message(
+        core.code_hash(newer),
+        json.dumps({"id": "m", "ts": 2000000000, "title": "Latest", "body": "hi", "url": ""}),
+        50,
+    )
+    page.goto(server.base + "/a#codes=" + older + "," + newer)
+    # wait until both cards have been refreshed (data-ts set)
+    page.wait_for_function(
+        "document.querySelectorAll('.channel[data-ts]').length >= 2"
+    )
+    names = page.eval_on_selector_all(".channel h2", "els => els.map(e => e.textContent)")
+    assert names[0] == "Newer"  # most recent activity on top
+    # each card shows its latest-event time in small font
+    latest = page.text_content(".channel:first-child .channel-latest")
+    assert latest.startswith("Latest:")
+
+
 def test_unknown_code_shows_friendly_error(server, page):
     page.goto(server.base + "/a#codes=this_code_does_not_exist_123456")
     page.wait_for_selector(".channel h2:has-text('Unknown channel')")

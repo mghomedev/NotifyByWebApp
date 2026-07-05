@@ -128,6 +128,7 @@ padding:10px 12px;margin:8px 0;word-break:break-all;user-select:all}
 .msg-rel{opacity:.85}
 .msgs-hint{font-size:.72rem;color:var(--muted);text-align:right;margin-bottom:2px}
 .msg-link{margin-top:3px;font-size:.85rem}
+.channel-latest{font-size:.72rem;color:var(--muted);margin-top:2px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
 .codes-item{display:flex;align-items:center;gap:8px;margin:6px 0}
 .codes-item span{font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all;flex:1}
@@ -602,6 +603,7 @@ function channelCard(code){
 var card=el('div','card channel');card.setAttribute('data-code',code);
 card.appendChild(el('h2','','\\u2026'));
 card.appendChild(el('div','muted stats',''));
+card.appendChild(el('div','channel-latest',''));
 card.appendChild(el('div','msgs'));
 // always-visible shareable QR for this channel
 var share=el('div','share');
@@ -663,6 +665,14 @@ var wrap=$('#channels');wrap.textContent='';
 $('#empty-hint').hidden=codes.length>0;
 codes.forEach(function(c){wrap.appendChild(channelCard(c));refreshChannel(c)})}
 
+// order channel cards by latest event (newest message, else creation), top first
+function sortChannels(){
+var wrap=$('#channels');
+var cards=Array.prototype.slice.call(wrap.querySelectorAll('.channel'));
+cards.sort(function(a,b){
+return (parseInt(b.getAttribute('data-ts'),10)||0)-(parseInt(a.getAttribute('data-ts'),10)||0)});
+cards.forEach(function(c){wrap.appendChild(c)})}
+
 function refreshChannel(code){
 var card=document.querySelector('.channel[data-code="'+code+'"]');
 if(!card)return;
@@ -691,7 +701,12 @@ if(m.url&&/^https?:\\/\\//.test(m.url)){
 var lk=el('div','msg-link');
 var a=el('a','','Open link');a.href=m.url;a.target='_blank';a.rel='noopener noreferrer';
 lk.appendChild(a);d.appendChild(lk)}
-msgs.appendChild(d)})
+msgs.appendChild(d)});
+var latest=(j.messages[0]&&j.messages[0].ts)||j.channel.created||0;
+card.setAttribute('data-ts',String(latest));
+if(latest){var lt=fmtTime(latest);
+card.querySelector('.channel-latest').textContent='Latest: '+lt.abs+' \\u00b7 '+lt.rel}
+sortChannels();
 }).catch(function(e){
 if(e&&e.status===404){
 card.querySelector('h2').textContent='Unknown channel';
