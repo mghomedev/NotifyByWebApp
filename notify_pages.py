@@ -112,6 +112,11 @@ padding:10px 12px;margin:8px 0;word-break:break-all;user-select:all}
 .banner{background:var(--accent);color:#fff;border-radius:14px;padding:12px 16px;margin:14px 0}
 #qr{margin:12px 0;background:#fff;border-radius:10px;padding:8px;display:inline-block}
 #qr svg{display:block;width:200px;height:200px}
+.share{margin:12px 0;padding:14px;border:1px solid var(--border);border-radius:12px;text-align:center}
+.share-label{font-weight:600;margin-bottom:8px}
+.qrshare{background:#fff;border-radius:10px;padding:8px;display:inline-block}
+.qrshare svg{display:block;width:168px;height:168px}
+.share-url{font-size:.76rem;text-align:left;margin:10px 0 0}
 .msgs{margin-top:8px}
 .msg{border-top:1px solid var(--border);padding:10px 0}
 .msg:first-child{border-top:0}
@@ -424,6 +429,7 @@ No channels yet — paste a channel code above, or create one on the
 <footer class="muted"><a href="/">Notify start page</a></footer>
 __DISCLAIMER__
 </div>
+<script src="/vendor/qrcode.js"></script>
 <script>
 (function(){
 'use strict';
@@ -572,6 +578,21 @@ var card=el('div','card channel');card.setAttribute('data-code',code);
 card.appendChild(el('h2','','\\u2026'));
 card.appendChild(el('div','muted stats',''));
 card.appendChild(el('div','msgs'));
+// always-visible shareable QR for this channel
+var share=el('div','share');
+var shareUrl=location.origin+'/a#codes='+encodeURIComponent(code);
+share.appendChild(el('div','share-label','Share this channel'));
+var qrbox=el('div','qrshare');
+try{var qr=qrcode(0,'M');qr.addData(shareUrl);qr.make();
+qrbox.innerHTML=qr.createSvgTag({cellSize:3,margin:2,scalable:true})}catch(e){}
+share.appendChild(qrbox);
+share.appendChild(el('div','code-pill share-url',shareUrl));
+var scopy=el('button','ghost','Copy share link');
+scopy.addEventListener('click',function(){
+if(navigator.clipboard)navigator.clipboard.writeText(shareUrl).then(function(){
+scopy.textContent='Copied!';setTimeout(function(){scopy.textContent='Copy share link'},1200)})});
+share.appendChild(scopy);
+card.appendChild(share);
 var d=document.createElement('details');
 d.appendChild(el('summary','','Send a message'));
 var ti=el('input');ti.placeholder='Title';ti.maxLength=120;

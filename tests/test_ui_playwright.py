@@ -121,6 +121,14 @@ def test_app_page_renders_channel_and_sends(server, page, channel):
     )
 
 
+def test_app_page_shows_shareable_qr(server, page, channel):
+    page.goto(server.base + "/a#codes=" + channel)
+    # a QR for sharing this channel is always visible in the channel card
+    page.wait_for_selector(".channel .qrshare svg")
+    share_url = page.text_content(".channel .share-url")
+    assert share_url.endswith("/a#codes=" + channel)
+
+
 def test_app_page_persists_codes_without_fragment(server, page, channel):
     page.goto(server.base + "/a#codes=" + channel)
     page.wait_for_selector(".channel h2:has-text('Test Channel')")
