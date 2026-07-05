@@ -127,6 +127,8 @@ padding:10px 12px;margin:8px 0;word-break:break-all;user-select:all}
 padding:2px 6px;margin:0;color:var(--muted)}
 .iconbtn:hover{color:var(--danger)}
 .msg-del{position:absolute;top:8px;right:-4px}
+.more-msgs{margin-top:4px}
+.more-msgs>summary{margin:8px 0 2px}
 .msg-title{font-weight:600}
 .msg-body{white-space:pre-wrap}
 .msg-time{color:var(--muted);font-size:.78rem;margin-bottom:3px}
@@ -713,7 +715,7 @@ api('/api/messages/clear',{code:code,send_password:deletePw(card)})
 .then(function(){refreshChannel(code)})
 .catch(function(e){alert((e&&e.status===403)?'Wrong or missing send password.':'Could not delete messages.')})});
 hdr.appendChild(clr);msgs.appendChild(hdr)}
-j.messages.forEach(function(m){
+function mkMsg(m){
 var d=el('div','msg');
 var del=el('button','iconbtn msg-del','\\uD83D\\uDDD1');
 del.title='Delete this message';del.setAttribute('aria-label','Delete this message');
@@ -733,7 +735,24 @@ if(m.url&&/^https?:\\/\\//.test(m.url)){
 var lk=el('div','msg-link');
 var a=el('a','','Open link');a.href=m.url;a.target='_blank';a.rel='noopener noreferrer';
 lk.appendChild(a);d.appendChild(lk)}
-msgs.appendChild(d)});
+return d}
+var VIS=3;
+j.messages.slice(0,VIS).forEach(function(m){msgs.appendChild(mkMsg(m))});
+if(j.messages.length>VIS){
+var more=document.createElement('details');more.className='more-msgs';
+more.appendChild(el('summary','','More \\u2026 ('+(j.messages.length-VIS)+' older)'));
+var oh=el('div','msgs-hdr');
+oh.appendChild(el('span','msgs-hint','Older messages'));
+var delOld=el('button','iconbtn','\\uD83D\\uDDD1');
+delOld.title='Delete all older messages';delOld.setAttribute('aria-label','Delete all older messages');
+delOld.addEventListener('click',function(){
+if(!confirm('Delete all older messages? (keeps the newest '+VIS+')'))return;
+api('/api/messages/clear',{code:code,keep:VIS,send_password:deletePw(card)})
+.then(function(){refreshChannel(code)})
+.catch(function(e){alert((e&&e.status===403)?'Wrong or missing send password.':'Could not delete messages.')})});
+oh.appendChild(delOld);more.appendChild(oh);
+j.messages.slice(VIS).forEach(function(m){more.appendChild(mkMsg(m))});
+msgs.appendChild(more)}
 var latest=(j.messages[0]&&j.messages[0].ts)||j.channel.created||0;
 card.setAttribute('data-ts',String(latest));
 if(latest){var lt=fmtTime(latest);

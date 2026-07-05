@@ -411,11 +411,15 @@ class MemoryStorage:
             e["msgs"] = [m for m in e["msgs"] if _msg_id_of(m) != msg_id]
             return len(e["msgs"]) < before
 
-    def clear_messages(self, kh: str) -> int:
+    def clear_messages(self, kh: str, keep: int = 0) -> int:
         with self._lock:
             e = self._entry(kh)
             if not e:
                 return 0
+            if keep > 0:
+                removed = max(0, len(e["msgs"]) - keep)
+                del e["msgs"][keep:]
+                return removed
             n = len(e["msgs"])
             e["msgs"] = []
             return n
@@ -522,7 +526,11 @@ class RedisStorage:
                 return bool(res[0])
         return False
 
-    def clear_messages(self, kh: str) -> int:
+    def clear_messages(self, kh: str, keep: int = 0) -> int:
+        if keep > 0:
+            # keep the newest `keep` (index 0 is newest); drop the rest
+            self._pipeline([["LTRIM", self._k("msgs", kh), "0", str(keep - 1)]])
+            return 0  # LTRIM does not report how many were removed
         return int(self._pipeline([["DEL", self._k("msgs", kh)]])[0] or 0)
 
     def touch(self, kh: str, ttl: int) -> None:
@@ -701,16 +709,19 @@ def delete_message(code: str, msg_id: object, send_password: object = None) -> "
     return storage.delete_message(kh, msg_id)
 
 
-def clear_messages(code: str, send_password: object = None) -> "bool | None":
-    """Delete all stored messages for a channel. None for unknown channels.
-    Raises SendForbidden for a protected channel with a wrong password."""
+def clear_messages(
+    code: str, send_password: object = None, keep: int = 0
+) -> "bool | None":
+    """Delete stored messages for a channel — all of them, or all but the
+    newest `keep`. None for unknown channels. Raises SendForbidden for a
+    protected channel with a wrong password."""
     storage = get_storage()
     kh = code_hash(code)
     meta_json = storage.get_channel(kh)
     if meta_json is None:
         return None
     _require_send_password(_load_stored(meta_json), send_password)
-    storage.clear_messages(kh)
+    storage.clear_messages(kh, keep if isinstance(keep, int) and keep > 0 else 0)
     return True
 
 

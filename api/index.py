@@ -342,7 +342,11 @@ class handler(BaseHTTPRequestHandler):
         code = self._get_code(payload)
         if code is None:
             return
-        result = core.clear_messages(code, payload.get("send_password"))
+        keep = payload.get("keep", 0)
+        if not isinstance(keep, int) or keep < 0:
+            keep = 0
+        keep = min(keep, 50)
+        result = core.clear_messages(code, payload.get("send_password"), keep)
         if result is None:
             self._error(404, "unknown channel")
             return

@@ -125,6 +125,15 @@ def test_delete_and_clear_messages_via_api(server, channel):
     assert server.post("/api/messages", {"code": channel}).json["messages"] == []
 
 
+def test_clear_messages_keep_via_api(server, channel):
+    for i in range(5):
+        server.post("/api/message", {"code": channel, "title": f"m{i}"})
+    resp = server.post("/api/messages/clear", {"code": channel, "keep": 3})
+    assert resp.status == 200
+    titles = [m["title"] for m in server.post("/api/messages", {"code": channel}).json["messages"]]
+    assert titles == ["m4", "m3", "m2"]
+
+
 def test_delete_message_bad_id_is_400(server, channel):
     assert server.post("/api/message/delete", {"code": channel, "id": ""}).status == 400
     assert server.post("/api/message/delete", {"code": channel}).status == 400

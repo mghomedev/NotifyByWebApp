@@ -475,6 +475,17 @@ def test_delete_and_clear_messages(env):
     assert core.channel_snapshot(code, 10)["messages"] == []
 
 
+def test_clear_messages_keep_newest(env):
+    core.reset_storage_for_tests()
+    code = core.create_channel("C")["code"]
+    for i in range(5):
+        core.publish(code, core.validate_message({"title": f"m{i}"}))
+    # keep the newest 3, drop the older 2
+    assert core.clear_messages(code, keep=3) is True
+    titles = [m["title"] for m in core.channel_snapshot(code, 10)["messages"]]
+    assert titles == ["m4", "m3", "m2"]  # newest-first, older two removed
+
+
 def test_delete_message_bad_id_and_unknown_channel(env):
     core.reset_storage_for_tests()
     code = core.create_channel("C")["code"]

@@ -236,6 +236,33 @@ def test_app_page_delete_message_and_clear_all(server, page, channel):
     expect(page.locator(".channel .msg")).to_have_count(0)
 
 
+def test_app_page_more_expander_and_delete_older(server, page, channel):
+    expect = playwright_api.expect
+    for i in range(5):
+        server.post("/api/message", {"code": channel, "title": f"m{i}"})
+    page.goto(server.base + "/a#codes=" + channel)
+    # only the newest 3 are shown outside the expander
+    expect(page.locator(".channel .msgs > .msg")).to_have_count(3)
+    visible = page.eval_on_selector_all(
+        ".channel .msgs > .msg .msg-title", "els => els.map(e => e.textContent)"
+    )
+    assert visible == ["m4", "m3", "m2"]
+
+    # the older two live in a collapsed "More …" expander
+    more = page.locator(".channel .more-msgs")
+    expect(more).to_have_count(1)
+    assert "More" in more.locator("summary").text_content()
+    assert more.locator(".msg").count() == 2
+    assert more.evaluate("el => el.open") is False  # collapsed by default
+    expect(more.locator(".msg").first).to_be_hidden()  # older ones hidden
+
+    # expand and delete the older ones (keeps newest 3); expander disappears
+    more.locator("summary").click()
+    more.locator(".msgs-hdr .iconbtn").click()
+    page.wait_for_selector(".channel .more-msgs", state="detached")
+    expect(page.locator(".channel .msg")).to_have_count(3)
+
+
 def test_unknown_code_shows_friendly_error(server, page):
     page.goto(server.base + "/a#codes=this_code_does_not_exist_123456")
     page.wait_for_selector(".channel h2:has-text('Unknown channel')")

@@ -33,10 +33,12 @@ https://github.com/mghomedev/NotifyByWebApp
   snapshots expose `send_protected` so the send UIs show a password field only when needed.
   `/api/channel` accepts `send_password` (min 4, max 128); `/api/message` accepts it too.
 - **Deleting messages**: `/api/message/delete` (one, by message `id`) and
-  `/api/messages/clear` (all) — gated by the same send-password when the channel is
-  protected (`_require_send_password`, shared with publish). The app page shows a trash
-  icon per message and a clear-all trash in the message header; on a protected channel the
-  UI reuses the send-password field or prompts for it.
+  `/api/messages/clear` (all, or all-but-newest via optional `keep`) — gated by the same
+  send-password when the channel is protected (`_require_send_password`, shared with
+  publish). App page: a trash icon per message, a clear-all trash in the message header,
+  and — when a channel has >3 messages — the 4th-and-older go into a collapsed
+  "More … (N older)" expander with its own single "delete older" trash (`keep=3`, Redis
+  `LTRIM`). On a protected channel the UI reuses the send-password field or prompts for it.
 
 ## Install-URL trick (core UX idea — the app URL carries the channel codes)
 
