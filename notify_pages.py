@@ -457,7 +457,7 @@ __DISCLAIMER__
 var VAPID_PUBLIC_KEY='__VAPID_PUBLIC_KEY__';
 var CODE_RE=/^[A-Za-z0-9_-]{16,64}$/;
 var LS_CODES='nbw_codes',LS_REMOVED='nbw_removed',LS_SUB='nbw_subscribed',
-LS_PENDING='nbw_pending_unsub';
+LS_PENDING='nbw_pending_unsub',LS_MUTED='nbw_muted';
 var codes=[];
 var _lastSubBody=null;
 function $(s){return document.querySelector(s)}
@@ -472,6 +472,25 @@ return j})})}
 function lsGet(k,d){try{var v=JSON.parse(localStorage.getItem(k));
 return v==null?d:v}catch(e){return d}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+// muted channels (per device): the endpoint is unsubscribed from the channel
+// on the server, so silencing does not rely on dropping pushes in the SW
+function isMuted(code){return lsGet(LS_MUTED,[]).indexOf(code)>=0}
+function setMuted(code,on){var a=lsGet(LS_MUTED,[]);var i=a.indexOf(code);
+if(on&&i<0)a.push(code);if(!on&&i>=0)a.splice(i,1);lsSet(LS_MUTED,a)}
+function muteChannel(code){
+setMuted(code,true);
+if('serviceWorker' in navigator){
+navigator.serviceWorker.ready.then(function(r){return r.pushManager.getSubscription()})
+.then(function(s){if(s)return api('/api/unsubscribe',{code:code,endpoint:s.endpoint})})
+.catch(function(){})}
+mirrorStateForSW()}
+function unmuteChannel(code){
+setMuted(code,false);
+if(lsGet(LS_SUB,false)&&'serviceWorker' in navigator){
+navigator.serviceWorker.ready.then(function(r){return r.pushManager.getSubscription()})
+.then(function(s){if(s)return api('/api/subscribe',{code:code,subscription:s.toJSON()})})
+.catch(function(){})}
+mirrorStateForSW()}
 
 function parseFragmentCodes(){
 var m=(location.hash||'').match(/codes=([^&]*)/);
@@ -545,7 +564,7 @@ try{
 if(!('caches' in window))return Promise.resolve();
 return caches.open('nbw-state').then(function(c){
 return c.put('/__nbw_state',new Response(JSON.stringify(
-{codes:codes,key:VAPID_PUBLIC_KEY,subscription:_lastSubBody}),
+{codes:codes,key:VAPID_PUBLIC_KEY,subscription:_lastSubBody,muted:lsGet(LS_MUTED,[])}),
 {headers:{'Content-Type':'application/json'}}))}).catch(function(){})
 }catch(e){return Promise.resolve()}}
 
@@ -584,13 +603,15 @@ var body=sub.toJSON();
 // failure self-heals on next open, but never claim ON unless the server
 // actually accepted at least one channel
 lsSet(LS_SUB,true);
-return Promise.all(codes.map(function(c){
+var active=codes.filter(function(c){return !isMuted(c)});  // skip muted channels
+return Promise.all(active.map(function(c){
 return api('/api/subscribe',{code:c,subscription:body}).then(
 function(){return true},function(){return false})
 })).then(function(oks){
 mirrorStateForSW(body);
+if(!active.length){updateNotifUI('on');return true}
 var ok=oks.filter(Boolean).length;
-updateNotifUI(ok===0?'subfail':(ok<codes.length?'partial':'on'));
+updateNotifUI(ok===0?'subfail':(ok<active.length?'partial':'on'));
 return ok>0})})})}
 
 // ------- messages
@@ -654,6 +675,14 @@ serr.textContent=(e&&e.status===403)?'This channel requires a valid send passwor
 d.appendChild(ti);d.appendChild(bo);d.appendChild(ur);d.appendChild(pw);d.appendChild(se);d.appendChild(serr);
 card.appendChild(d);
 var row=el('div','row');
+var mute=el('button','ghost mute-btn','');
+function paintMute(){var m=isMuted(code);
+mute.textContent=m?'\\uD83D\\uDD15 Unmute':'\\uD83D\\uDD14 Mute';
+mute.title=m?'Muted on this device \\u2014 tap to receive notifications again'
+:'Silence notifications for this channel on this device'}
+paintMute();
+mute.addEventListener('click',function(){
+if(isMuted(code))unmuteChannel(code);else muteChannel(code);paintMute()});
 var cp=el('button','ghost','Copy code');
 cp.addEventListener('click',function(){
 if(navigator.clipboard)navigator.clipboard.writeText(code).then(function(){
@@ -663,7 +692,7 @@ rf.addEventListener('click',function(){refreshChannel(code)});
 var rm=el('button','danger','Remove');
 rm.addEventListener('click',function(){
 if(confirm('Remove this channel from this device?'))removeChannel(code)});
-row.appendChild(cp);row.appendChild(rf);row.appendChild(rm);
+row.appendChild(mute);row.appendChild(cp);row.appendChild(rf);row.appendChild(rm);
 card.appendChild(row);
 return card}
 
@@ -787,6 +816,7 @@ if(!(e&&e.status===404))queuePendingUnsub(it.code,it.endpoint)})})}
 
 function removeChannel(code){
 codes=codes.filter(function(x){return x!==code});lsSet(LS_CODES,codes);
+setMuted(code,false);
 var removedArr=lsGet(LS_REMOVED,[]);
 if(removedArr.indexOf(code)<0)removedArr.push(code);
 lsSet(LS_REMOVED,removedArr);
@@ -908,10 +938,12 @@ self.addEventListener('pushsubscriptionchange',function(e){
 e.waitUntil(caches.open('nbw-state').then(function(c){return c.match('/__nbw_state')})
 .then(function(r){return r?r.json():null}).then(function(st){
 if(!st||!st.key||!st.codes||!st.codes.length)return;
+var muted=st.muted||[];
+var active=st.codes.filter(function(code){return muted.indexOf(code)<0});
 return self.registration.pushManager.subscribe({userVisibleOnly:true,
 applicationServerKey:urlB64ToU8SW(st.key)}).then(function(sub){
 var body=sub.toJSON();
-return Promise.all(st.codes.map(function(code){
+return Promise.all(active.map(function(code){
 return fetch('/api/subscribe',{method:'POST',
 headers:{'Content-Type':'application/json'},
 body:JSON.stringify({code:code,subscription:body})}).catch(function(){})}))})})

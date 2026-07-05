@@ -55,6 +55,10 @@ codes, get the app URL + QR. Implementation layers (all implemented in notify_pa
    in `nbw_removed` so an install-URL fragment does not resurrect them.
 4. Final fallback (matters on iOS, where the installed app has separate storage): in-app
    “Add a channel” by pasting a code.
+5. Per-device **mute** (`nbw_muted`): each channel card has a 🔔/🔕 Mute toggle. Muting
+   unsubscribes this device's endpoint from that channel on the server (`/api/unsubscribe`)
+   rather than dropping pushes in the SW (which would violate the Web Push contract).
+   `ensureSubscribed` and the SW `pushsubscriptionchange` re-subscribe only non-muted codes.
 
 ## Architecture (all UI served inline from one function — no static bundling risk)
 

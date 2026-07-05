@@ -147,6 +147,39 @@ def test_ios_installed_pwa_subscribe_registers_on_server(browser, server, channe
         ctx.close()
 
 
+def _subscribers_js(code):
+    return (
+        "async () => { const r = await fetch('/api/messages', {method:'POST',"
+        "headers:{'Content-Type':'application/json'},body: JSON.stringify({code: %r})});"
+        "return (await r.json()).subscribers; }" % code
+    )
+
+
+def test_mute_unsubscribes_and_unmute_resubscribes(browser, server):
+    code = server.post("/api/channel", {"name": "Muteable"}).json["code"]
+    ctx = browser.new_context(user_agent=IPHONE_UA, has_touch=True)
+    ctx.add_init_script(FAKE_STANDALONE_PUSH)
+    try:
+        page = ctx.new_page()
+        page.goto(server.base + "/a#codes=" + code)
+        page.wait_for_selector(".channel")
+        page.click("#enable-btn")
+        # subscribed on this device
+        page.wait_for_function("(%s)().then(n => n >= 1)" % _subscribers_js(code))
+
+        # mute -> the channel's endpoint is unsubscribed on the server
+        page.click(".channel .mute-btn")
+        page.wait_for_function("(%s)().then(n => n === 0)" % _subscribers_js(code))
+        assert "Unmute" in page.text_content(".channel .mute-btn")
+
+        # unmute -> re-subscribed
+        page.click(".channel .mute-btn")
+        page.wait_for_function("(%s)().then(n => n >= 1)" % _subscribers_js(code))
+        assert "Unmute" not in page.text_content(".channel .mute-btn")
+    finally:
+        ctx.close()
+
+
 def test_installed_pwa_reports_error_when_server_rejects(browser, server):
     """If every /api/subscribe fails (here: an unknown/expired channel -> 404),
     the app must NOT claim notifications are ON — it must surface an error and
