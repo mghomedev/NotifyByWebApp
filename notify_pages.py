@@ -183,6 +183,7 @@ send and receive its messages.</p>
 <h2>1. Create a channel</h2>
 <p class="muted">You get a secret channel code. Save it — it cannot be recovered.</p>
 <input id="channel-name" maxlength="80" placeholder="Channel name (optional)" autocomplete="off">
+<input id="channel-password" maxlength="128" placeholder="Send password (optional; only holders can send)" autocomplete="off">
 <button id="create-btn">Create channel</button>
 <p class="err" id="create-error"></p>
 <div id="create-result" hidden>
@@ -190,6 +191,7 @@ send and receive its messages.</p>
 <div class="code-pill" id="new-code"></div>
 <button class="ghost" data-copy="#new-code">Copy code</button>
 <p class="muted">It was added to your app link below.</p>
+<p class="muted" id="create-protected" hidden>&#128274; Sending to this channel requires the send password you set. Anyone with the code can still receive.</p>
 </div>
 </div>
 
@@ -225,6 +227,7 @@ channel code can send.</p>
 <input id="send-title" maxlength="120" placeholder="Title (optional)" autocomplete="off">
 <textarea id="send-body" maxlength="2000" rows="3" placeholder="Message text (optional if a title is given)"></textarea>
 <input id="send-url" maxlength="500" placeholder="Link https://… (optional)" autocomplete="off">
+<input id="send-password" maxlength="128" placeholder="Send password (only if the channel requires one)" autocomplete="off">
 <button id="send-btn">Send message</button>
 <p class="err" id="send-error"></p>
 <p class="status-ok" id="send-ok" hidden></p>
@@ -319,10 +322,12 @@ if(e.key==='Enter'&&addCode($('#code-input').value))$('#code-input').value=''});
 $('#create-btn').addEventListener('click',function(){
 var btn=$('#create-btn');btn.disabled=true;
 $('#create-error').textContent='';
-api('/api/channel',{name:$('#channel-name').value}).then(function(j){
+api('/api/channel',{name:$('#channel-name').value,send_password:$('#channel-password').value}).then(function(j){
 $('#new-code').textContent=j.code;
 $('#create-result').hidden=false;
-addCode(j.code);$('#send-code').value=j.code;updateCurlCode()}).catch(function(e){
+$('#create-protected').hidden=!j.send_protected;
+addCode(j.code);$('#send-code').value=j.code;
+$('#send-password').value=$('#channel-password').value;updateCurlCode()}).catch(function(e){
 $('#create-error').textContent='Could not create channel: '+e.message}).then(function(){
 btn.disabled=false})});
 document.addEventListener('click',function(e){
@@ -350,7 +355,7 @@ var err=$('#send-error'),ok=$('#send-ok');err.textContent='';ok.hidden=true;
 if(!CODE_RE.test(code)){err.textContent='Enter a valid channel code (create one above, or paste it).';return}
 if(!title&&!$('#send-body').value.trim()){err.textContent='Enter a title or a message.';return}
 var btn=this;btn.disabled=true;
-api('/api/message',{code:code,title:title,body:$('#send-body').value,url:$('#send-url').value})
+api('/api/message',{code:code,title:title,body:$('#send-body').value,url:$('#send-url').value,send_password:$('#send-password').value})
 .then(function(j){
 $('#send-title').value='';$('#send-body').value='';$('#send-url').value='';
 var m;
@@ -358,7 +363,9 @@ if(j.push_disabled)m='Stored. Push is not configured on this server.';
 else if(j.sent>0)m='Sent to '+j.sent+' device(s).';
 else m='Message stored, but no device is subscribed to this channel yet. Install the app on a phone and enable notifications to receive it.';
 ok.textContent=m;ok.hidden=false})
-.catch(function(e){err.textContent='Could not send: '+(e.message||'error')})
+.catch(function(e){
+if(e&&e.status===403)err.textContent='This channel requires a valid send password.';
+else err.textContent='Could not send: '+(e.message||'error')})
 .then(function(){btn.disabled=false})});
 // ---- optional: remember channels in a cookie (opt-in)
 function setCookie(n,v,days){
@@ -620,19 +627,22 @@ var ti=el('input');ti.placeholder='Title (optional)';ti.maxLength=120;
 var bo=document.createElement('textarea');bo.placeholder='Message (optional if a title is given)';
 bo.maxLength=2000;bo.rows=3;
 var ur=el('input');ur.placeholder='Link https://\\u2026 (optional)';ur.maxLength=500;
+var pw=el('input');pw.placeholder='Send password (required for this channel)';
+pw.maxLength=128;pw.className='send-pw';pw.hidden=true;
 var se=el('button','','Send');
 var serr=el('div','muted');
 se.addEventListener('click',function(){
 if(!ti.value.trim()&&!bo.value.trim()){serr.textContent='Enter a title or a message.';return}
 se.disabled=true;serr.textContent='';
-api('/api/message',{code:code,title:ti.value,body:bo.value,url:ur.value})
+api('/api/message',{code:code,title:ti.value,body:bo.value,url:ur.value,send_password:pw.value})
 .then(function(j){
 ti.value='';bo.value='';ur.value='';
 serr.textContent='Sent to '+j.sent+' device(s).';
 refreshChannel(code)})
-.catch(function(e){serr.textContent='Error: '+e.message})
+.catch(function(e){
+serr.textContent=(e&&e.status===403)?'This channel requires a valid send password.':('Error: '+e.message)})
 .then(function(){se.disabled=false})});
-d.appendChild(ti);d.appendChild(bo);d.appendChild(ur);d.appendChild(se);d.appendChild(serr);
+d.appendChild(ti);d.appendChild(bo);d.appendChild(ur);d.appendChild(pw);d.appendChild(se);d.appendChild(serr);
 card.appendChild(d);
 var row=el('div','row');
 var cp=el('button','ghost','Copy code');
@@ -661,6 +671,10 @@ var cname=j.channel.name||'Unnamed channel';
 card.querySelector('h2').textContent=cname;
 var _sc=card.querySelector('.share-channel');
 if(_sc)_sc.textContent='for Channel: '+cname;
+var prot=!!(j.channel&&j.channel.send_protected);
+var _pw=card.querySelector('.send-pw');if(_pw)_pw.hidden=!prot;
+var _sum=card.querySelector('details summary');
+if(_sum)_sum.textContent=prot?'Send a message (password required)':'Send a message';
 card.querySelector('.stats').textContent=j.subscribers+' subscribed device(s)';
 var msgs=card.querySelector('.msgs');msgs.textContent='';
 if(!j.messages.length){msgs.appendChild(el('div','muted','No messages yet.'))}

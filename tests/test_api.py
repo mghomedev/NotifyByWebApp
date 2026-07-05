@@ -76,6 +76,40 @@ def test_channel_create_rejects_long_name(server):
     assert resp.status == 400
 
 
+def test_send_password_channel_flow(server):
+    resp = server.post("/api/channel", {"name": "Event", "send_password": "manager-key"})
+    assert resp.status == 200 and resp.json["send_protected"] is True
+    code = resp.json["code"]
+    # snapshot advertises that sending is protected
+    snap = server.post("/api/messages", {"code": code}).json
+    assert snap["channel"]["send_protected"] is True
+    # sending without / with a wrong password is forbidden
+    assert server.post("/api/message", {"code": code, "title": "x"}).status == 403
+    assert (
+        server.post(
+            "/api/message", {"code": code, "title": "x", "send_password": "nope"}
+        ).status
+        == 403
+    )
+    # correct password sends
+    resp = server.post(
+        "/api/message", {"code": code, "title": "x", "send_password": "manager-key"}
+    )
+    assert resp.status == 200 and resp.json["stored"]
+
+
+def test_unprotected_channel_needs_no_password(server, channel):
+    assert (
+        server.post("/api/messages", {"code": channel}).json["channel"]["send_protected"]
+        is False
+    )
+    assert server.post("/api/message", {"code": channel, "title": "x"}).status == 200
+
+
+def test_create_channel_rejects_short_send_password(server):
+    assert server.post("/api/channel", {"name": "x", "send_password": "ab"}).status == 400
+
+
 # ------------------------------------------------------- error handling
 
 

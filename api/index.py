@@ -252,6 +252,8 @@ class handler(BaseHTTPRequestHandler):
             return
         except core.ChannelFull:
             self._safe_error(409, "channel subscriber limit reached")
+        except core.SendForbidden:
+            self._safe_error(403, "this channel requires a valid send password")
         except core.StorageError:
             self._safe_error(502, "storage unavailable")
         except json.JSONDecodeError:
@@ -285,7 +287,8 @@ class handler(BaseHTTPRequestHandler):
             )
             return
         name = core.clean_channel_name(payload.get("name"))
-        result = core.create_channel(name)
+        send_password = core.clean_send_password(payload.get("send_password"))
+        result = core.create_channel(name, send_password)
         self._json(200, {"ok": True, **result})
 
     def _post_subscribe(self, payload: dict) -> None:
@@ -313,7 +316,7 @@ class handler(BaseHTTPRequestHandler):
         if code is None:
             return
         message = core.validate_message(payload)
-        result = core.publish(code, message)
+        result = core.publish(code, message, payload.get("send_password"))
         if result is None:
             self._error(404, "unknown channel")
             return

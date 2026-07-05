@@ -403,3 +403,48 @@ def test_create_channel_stores_only_hash(env):
     code = result["code"]
     assert storage.get_channel(core.code_hash(code)) is not None
     assert code not in storage._ch  # raw code is never a storage key
+
+
+def test_clean_send_password():
+    assert core.clean_send_password(None) == ""
+    assert core.clean_send_password("   ") == ""
+    assert core.clean_send_password("  event key  ") == "event key"
+    for bad in ["abc", "x" * 129, 5]:
+        with pytest.raises(ValueError):
+            core.clean_send_password(bad)
+
+
+def test_send_password_gates_publish(env):
+    core.reset_storage_for_tests()
+    ch = core.create_channel("Event", send_password="manager-key")
+    assert ch["send_protected"] is True
+    code = ch["code"]
+    # only a hash is stored, never the raw password
+    meta = json.loads(core.get_storage().get_channel(core.code_hash(code)))
+    assert "manager-key" not in json.dumps(meta)
+    assert meta["send_pw"] == core._send_password_hash("manager-key")
+
+    msg = core.validate_message({"title": "hi"})
+    with pytest.raises(core.SendForbidden):
+        core.publish(code, msg)  # no password
+    with pytest.raises(core.SendForbidden):
+        core.publish(code, msg, "wrong")
+    assert core.publish(code, msg, "manager-key")["stored"] is True
+
+
+def test_unprotected_channel_ignores_send_password(env):
+    core.reset_storage_for_tests()
+    ch = core.create_channel("Open")
+    assert ch["send_protected"] is False
+    code = ch["code"]
+    msg = core.validate_message({"title": "hi"})
+    assert core.publish(code, msg, "whatever")["stored"] is True
+    assert core.publish(code, msg)["stored"] is True
+
+
+def test_snapshot_reports_send_protected(env):
+    core.reset_storage_for_tests()
+    prot = core.create_channel("P", send_password="phrase")["code"]
+    openc = core.create_channel("O")["code"]
+    assert core.channel_snapshot(prot, 5)["channel"]["send_protected"] is True
+    assert core.channel_snapshot(openc, 5)["channel"]["send_protected"] is False

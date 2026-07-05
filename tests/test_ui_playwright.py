@@ -170,6 +170,28 @@ def test_app_page_persists_codes_without_fragment(server, page, channel):
     page.wait_for_selector(".channel h2:has-text('Test Channel')")
 
 
+def test_app_page_send_password_required(server, page):
+    code = server.post(
+        "/api/channel", {"name": "Locked", "send_password": "manager-key"}
+    ).json["code"]
+    page.goto(server.base + "/a#codes=" + code)
+    # the card advertises that sending needs a password and shows the field
+    page.wait_for_selector(".channel details summary:has-text('password required')")
+    page.click(".channel details summary")
+    page.wait_for_selector(".channel .send-pw:not([hidden])")
+
+    # sending without the password is rejected
+    page.fill(".channel input[placeholder^='Title']", "Hello")
+    page.click(".channel details button")
+    page.wait_for_selector(".channel details:has-text('requires a valid send password')")
+
+    # sending with the correct password works
+    page.fill(".channel .send-pw", "manager-key")
+    page.fill(".channel input[placeholder^='Title']", "Hello again")
+    page.click(".channel details button")
+    page.wait_for_selector(".channel .msg-title:has-text('Hello again')")
+
+
 def test_unknown_code_shows_friendly_error(server, page):
     page.goto(server.base + "/a#codes=this_code_does_not_exist_123456")
     page.wait_for_selector(".channel h2:has-text('Unknown channel')")

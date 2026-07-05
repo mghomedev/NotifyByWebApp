@@ -12,6 +12,7 @@ Design rules (see CLAUDE.md):
 from __future__ import annotations
 
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -97,6 +98,10 @@ class ChannelFull(Exception):
     """Subscriber cap for this channel reached."""
 
 
+class SendForbidden(Exception):
+    """The channel requires a send password that was missing or wrong."""
+
+
 # ---------------------------------------------------------- codes & keys
 
 
@@ -143,6 +148,26 @@ def clean_channel_name(name: object) -> str:
     if len(name) > MAX_NAME:
         raise ValueError(f"name too long (max {MAX_NAME} characters)")
     return name
+
+
+def clean_send_password(pw: object) -> str:
+    """Normalize an optional send-password; returns '' when none is set."""
+    if pw is None:
+        return ""
+    if not isinstance(pw, str):
+        raise ValueError("send_password must be a string")
+    pw = _clean_text(pw).strip()
+    if not pw:
+        return ""
+    if len(pw) < 4:
+        raise ValueError("send password too short (min 4 characters)")
+    if len(pw) > 128:
+        raise ValueError("send password too long (max 128 characters)")
+    return pw
+
+
+def _send_password_hash(pw: str) -> str:
+    return hashlib.sha256(pw.encode("utf-8")).hexdigest()
 
 
 def _derive_title(body: str) -> str:
@@ -535,13 +560,20 @@ def diagnostics() -> dict:
 # ------------------------------------------------------ domain operations
 
 
-def create_channel(name: str) -> dict:
+def create_channel(name: str, send_password: str = "") -> dict:
     storage = get_storage()
     for _ in range(3):
         code = generate_code()
         meta = {"name": name, "created": int(time.time())}
+        if send_password:
+            meta["send_pw"] = _send_password_hash(send_password)
         if storage.create_channel(code_hash(code), json.dumps(meta)):
-            return {"code": code, "name": name, "created": meta["created"]}
+            return {
+                "code": code,
+                "name": name,
+                "created": meta["created"],
+                "send_protected": bool(send_password),
+            }
     raise StorageError("could not create channel")
 
 
@@ -555,7 +587,11 @@ def channel_snapshot(code: str, limit: int) -> "dict | None":
     meta = _load_stored(meta_json)
     messages = [_load_stored(m) for m in storage.get_messages(kh, limit)]
     return {
-        "channel": {"name": meta.get("name", ""), "created": meta.get("created")},
+        "channel": {
+            "name": meta.get("name", ""),
+            "created": meta.get("created"),
+            "send_protected": bool(meta.get("send_pw")),
+        },
         "subscribers": storage.sub_count(kh),
         "messages": messages,
     }
@@ -612,15 +648,22 @@ def _truncate_utf8(text: str, max_bytes: int) -> str:
     return encoded[:max_bytes].decode("utf-8", "ignore").rstrip() + "…"
 
 
-def publish(code: str, message: dict) -> "dict | None":
+def publish(code: str, message: dict, send_password: object = None) -> "dict | None":
     """Store a validated message and push it to all subscribers.
-    Returns result counts, or None for unknown channels."""
+    Returns result counts, or None for unknown channels. Raises SendForbidden
+    if the channel requires a send password and it is missing/wrong."""
     storage = get_storage()
     kh = code_hash(code)
     meta_json = storage.get_channel(kh)
     if meta_json is None:
         return None
     meta = _load_stored(meta_json)
+
+    required = meta.get("send_pw")
+    if required:
+        provided = send_password if isinstance(send_password, str) else ""
+        if not hmac.compare_digest(_send_password_hash(provided), required):
+            raise SendForbidden()
 
     msg = {
         "id": secrets.token_hex(4),
