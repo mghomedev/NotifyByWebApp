@@ -330,7 +330,7 @@ var item=el('div','codes-item');
 item.appendChild(el('span','',c));
 var rm=el('button','danger','Remove');
 rm.addEventListener('click',function(){
-codes=codes.filter(function(x){return x!==c});renderCodes();updateLink()});
+codes=codes.filter(function(x){return x!==c});renderCodes();updateLink();persistIfConsented()});
 item.appendChild(rm);list.appendChild(item)});
 updateSendUI()}
 function updateLink(){
@@ -349,7 +349,7 @@ $('#add-error').textContent='That does not look like a channel code (16-64 lette
 return false}
 $('#add-error').textContent='';
 if(codes.indexOf(c)<0)codes.push(c);
-renderCodes();updateLink();return true}
+renderCodes();updateLink();persistIfConsented();return true}
 $('#add-code').addEventListener('click',function(){
 if(addCode($('#code-input').value))$('#code-input').value=''});
 $('#code-input').addEventListener('keydown',function(e){
@@ -402,7 +402,11 @@ ok.textContent=m;ok.hidden=false})
 if(e&&e.status===403)err.textContent='This channel requires a valid send password.';
 else err.textContent='Could not send: '+(e.message||'error')})
 .then(function(){btn.disabled=false})});
-// ---- optional: remember channels in a cookie (opt-in)
+// ---- optional: remember channels on this device (opt-in). Persisted to BOTH a
+// cookie AND localStorage for durability (browsers cap JS cookies — Safari ~7 days),
+// merged + self-healed on every load. Never cleared implicitly; only via Remove /
+// Forget / the user clearing site data. See CLAUDE.md persistence requirement.
+var LS_SAVED='nbw_saved_codes';
 function setCookie(n,v,days){
 var d=new Date();d.setTime(d.getTime()+days*864e5);
 var sec=location.protocol==='https:'?';Secure':'';
@@ -412,24 +416,33 @@ var m=document.cookie.match(new RegExp('(?:^|; )'+n+'=([^;]*)'));
 return m?decodeURIComponent(m[1]):null}
 function delCookie(n){
 document.cookie=n+'=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax'}
+function lsSaveArr(k,a){try{localStorage.setItem(k,JSON.stringify(a))}catch(e){}}
+function lsLoadArr(k){try{var v=JSON.parse(localStorage.getItem(k));
+return Array.isArray(v)?v:[]}catch(e){return[]}}
+function persistSaved(){setCookie('nbw_codes',codes.join(','),365);lsSaveArr(LS_SAVED,codes)}
+function persistIfConsented(){var c=$('#save-consent');if(c&&c.checked)persistSaved()}
 $('#save-btn').addEventListener('click',function(){
 var st=$('#save-status');
 if(!$('#save-consent').checked){
-st.textContent='Tick the box first \\u2014 that is your consent to store a cookie.';return}
+st.textContent='Tick the box first \\u2014 that is your consent to store on this device.';return}
 if(!codes.length){st.textContent='Create or add at least one channel first.';return}
-setCookie('nbw_codes',codes.join(','),365);
-st.textContent='Saved '+codes.length+' channel(s) in a cookie on this device.'});
+persistSaved();
+st.textContent='Saved '+codes.length+' channel(s) on this device (cookie + local storage).'});
 $('#forget-btn').addEventListener('click',function(){
-delCookie('nbw_codes');$('#save-consent').checked=false;
+delCookie('nbw_codes');try{localStorage.removeItem(LS_SAVED)}catch(e){}
+$('#save-consent').checked=false;
 $('#save-status').textContent='Saved channels cleared from this device.'});
 (function loadSaved(){
-var saved=getCookie('nbw_codes');if(!saved)return;
+var merged=[];
+(getCookie('nbw_codes')||'').split(',').concat(lsLoadArr(LS_SAVED)).forEach(function(c){
+c=(c||'').trim();if(CODE_RE.test(c)&&merged.indexOf(c)<0)merged.push(c)});
+if(!merged.length)return;
 var added=false;
-saved.split(',').forEach(function(c){
-if(CODE_RE.test(c)&&codes.indexOf(c)<0){codes.push(c);added=true}});
+merged.forEach(function(c){if(codes.indexOf(c)<0){codes.push(c);added=true}});
+persistSaved();  // heal: rewrite BOTH stores (restore a dropped one, refresh cookie window)
 if(added){renderCodes();updateLink()}
-if(codes.length){$('#save-consent').checked=true;
-$('#save-status').textContent='Loaded '+codes.length+' saved channel(s) from a cookie on this device.'}})();
+$('#save-consent').checked=true;
+$('#save-status').textContent='Loaded '+codes.length+' saved channel(s) from this device.'})();
 $('#curl-host').textContent=location.origin;
 updateSendUI();
 })();

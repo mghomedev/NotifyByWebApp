@@ -100,6 +100,43 @@ def test_landing_send_message_and_cookie_save(server, page):
     assert page.query_selector("#code-list .codes-item") is None
 
 
+def test_landing_saved_channels_persist_to_both_stores_and_survive_cookie_loss(server, page):
+    page.goto(server.base + "/")
+    page.fill("#channel-name", "Durable")
+    page.click("#create-btn")
+    page.wait_for_selector("#create-result:not([hidden])")
+    code = page.text_content("#new-code").strip()
+    page.check("#save-consent")
+    page.click("#save-btn")
+    # written to BOTH a cookie and localStorage
+    assert any(c["name"] == "nbw_codes" for c in page.context.cookies())
+    assert code in (page.evaluate("localStorage.getItem('nbw_saved_codes')") or "")
+
+    # survives losing the cookie (e.g. Safari's ~7-day cap on JS cookies)
+    page.context.clear_cookies()
+    page.reload()
+    page.wait_for_selector("#code-list .codes-item span")
+    assert code in page.text_content("#code-list")
+    # the heal step rewrote the dropped cookie
+    assert any(c["name"] == "nbw_codes" for c in page.context.cookies())
+
+
+def test_landing_saved_channels_survive_localstorage_loss(server, page):
+    page.goto(server.base + "/")
+    page.fill("#channel-name", "Durable2")
+    page.click("#create-btn")
+    page.wait_for_selector("#create-result:not([hidden])")
+    code = page.text_content("#new-code").strip()
+    page.check("#save-consent")
+    page.click("#save-btn")
+    # drop only localStorage; the cookie should restore the channels
+    page.evaluate("localStorage.removeItem('nbw_saved_codes')")
+    page.reload()
+    page.wait_for_selector("#code-list .codes-item span")
+    assert code in page.text_content("#code-list")
+    assert code in (page.evaluate("localStorage.getItem('nbw_saved_codes')") or "")
+
+
 def test_app_page_renders_channel_and_sends(server, page, channel):
     page.goto(server.base + "/a#codes=" + channel)
     page.wait_for_selector(".channel h2:has-text('Test Channel')")

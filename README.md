@@ -46,6 +46,16 @@ Limits: title ≤ 120 chars, body ≤ 2000, url optional http(s) ≤ 500 chars, 
 Subscribing/unsubscribing (`/api/subscribe`, `/api/unsubscribe`) is normally done by the
 app itself.
 
+## Your saved channels stay on your device
+
+Ticking **"Remember my channels"** on the start page stores your channel codes locally in
+your browser — in **both a cookie and local storage**, for resilience, and re-saved on every
+visit — so they reappear next time. They are never sent anywhere for safekeeping. You remove
+them yourself with a channel's **Remove** button, **Forget saved channels**, or by clearing
+this site's cookies/site data. Browsers can still clear local storage on their own (Safari,
+for example, limits script-set cookies to about 7 days), so **your real backup is the channel
+code / app-link QR** — keep those and you can always restore a channel.
+
 ## Deploy your own
 
 1. Fork/import this repo into [Vercel](https://vercel.com) (zero config — one Python

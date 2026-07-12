@@ -60,6 +60,27 @@ codes, get the app URL + QR. Implementation layers (all implemented in notify_pa
    rather than dropping pushes in the SW (which would violate the Web Push contract).
    `ensureSubscribed` and the SW `pushsubscriptionchange` re-subscribe only non-muted codes.
 
+## Channel-persistence durability requirement (do NOT regress)
+
+Users trust that saved channels persist locally; losing that state loses their channels
+(the only recovery is the channel code / app-link QR). Requirements:
+
+- The landing-page **"Remember my channels"** feature persists to **BOTH** a cookie
+  (`nbw_codes`) **and** localStorage (`nbw_saved_codes`, a key distinct from the app page's
+  `nbw_codes` so it never clobbers the installed app's channel list). It **reads/merges from
+  both** on load and **re-writes both on every visit** — this self-heals (if one store was
+  dropped the other restores it) and refreshes the cookie's expiry window. When the consent
+  box is ticked, channel add/remove auto-persists to both.
+- **Never** rename, clear, or change the FORMAT of these keys without a migration that
+  preserves existing data; never clear them implicitly; keep this code stable across
+  releases. Treat it as load-bearing user data.
+- Removal is **user-initiated only**: the per-channel **Remove** button, **Forget saved
+  channels**, or the user clearing their browser cookies/site data.
+- Fragility to design around (why localStorage was added alongside the cookie): browsers cap
+  JS-set (`document.cookie`) cookies — Safari ITP limits them to ~7 days regardless of the
+  1-year expiry — so localStorage is the durable copy and the cookie is secondary. The
+  channel code + QR remain the true backup.
+
 ## Architecture (all UI served inline from one function — no static bundling risk)
 
 - `api/index.py` — single Vercel entrypoint (`BaseHTTPRequestHandler` named `handler`;
