@@ -124,6 +124,9 @@ button,.btn{display:inline-block;padding:10px 16px;margin:6px 6px 0 0;border:0;
 border-radius:10px;background:var(--accent);color:#fff;font:inherit;font-weight:600;
 cursor:pointer;text-decoration:none}
 button:active,.btn:active{background:var(--accent-press)}
+.bigbtn{display:inline-block;padding:14px 22px;border-radius:12px;background:var(--accent);
+color:#fff;font-weight:700;font-size:1.05rem;text-decoration:none}
+.bigbtn:active{background:var(--accent-press)}
 button[disabled]{opacity:.6}
 button.ghost{background:transparent;color:var(--accent);border:1px solid var(--border)}
 button.danger{background:transparent;color:var(--danger);border:1px solid var(--border)}
@@ -240,6 +243,24 @@ INDEX_HTML = (
 """
     + _HEAD_COMMON
     + """<title>Notify by Web App</title>
+<script>
+// Returning visitors: if channels are already saved on this device, go straight to the
+// app (/a) so the main page STARTS with your channels + messages + send, not the create
+// form. New users, ?create (the "create a new channel" link), or saving-off fall through
+// to the generator below. Runs in <head> so there is no flash of the wrong page.
+(function(){try{
+if(/(?:^|[?&])create(?:[=&]|$)/.test(location.search))return;
+if(localStorage.getItem('nbw_nosave')==='1')return;
+var RE=/^[A-Za-z0-9_-]{16,64}$/,seen=[],rm=[];
+try{var rr=JSON.parse(localStorage.getItem('nbw_removed'));if(rr&&rr.length)rm=rr}catch(e){}
+function add(c){c=(c||'').trim();if(RE.test(c)&&rm.indexOf(c)<0&&seen.indexOf(c)<0)seen.push(c)}
+var m=document.cookie.match(/(?:^|; )nbw_codes=([^;]*)/);
+if(m){decodeURIComponent(m[1]).split(',').forEach(add)}
+var ls=null;try{ls=JSON.parse(localStorage.getItem('nbw_saved_codes'))}catch(e){}
+if(ls&&ls.length)ls.forEach(add);
+if(seen.length)location.replace('/a#codes='+seen.map(encodeURIComponent).join(','));
+}catch(e){}})();
+</script>
 </head>
 <body>
 <div class="wrap">
@@ -247,6 +268,7 @@ INDEX_HTML = (
 <p>Push notifications on your phone for anything — no app store, no account.
 A <strong>channel</strong> is identified by a secret code: anyone with the code can
 send and receive its messages.</p>
+<p id="have-channels" hidden><a id="open-app-top" class="bigbtn" href="/a">&#9654; Open my channels &amp; messages</a></p>
 
 <div class="card">
 <h2>1. Create your channel</h2>
@@ -367,9 +389,11 @@ var item=el('div','codes-item');
 item.appendChild(el('span','',c));
 var rm=el('button','danger','Remove');
 rm.addEventListener('click',function(){
+tombstone(c);
 codes=codes.filter(function(x){return x!==c});renderCodes();updateLink();saveAndPaint()});
 item.appendChild(rm);list.appendChild(item)});
 var yc=$('#your-channels');if(yc)yc.hidden=!codes.length;
+var hc=$('#have-channels');if(hc)hc.hidden=!codes.length;
 updateSendUI()}
 function updateLink(){
 var res=$('#link-result');
@@ -378,6 +402,7 @@ res.hidden=false;
 var url=location.origin+'/a#codes='+codes.map(encodeURIComponent).join(',');
 $('#app-url').textContent=url;
 $('#open-app').setAttribute('href',url);
+var ot=$('#open-app-top');if(ot)ot.setAttribute('href',url);
 var qr=qrcode(0,'M');qr.addData(url);qr.make();
 $('#qr').innerHTML=qr.createSvgTag({cellSize:4,margin:2,scalable:true})}
 function addCode(c){
@@ -386,6 +411,7 @@ if(!CODE_RE.test(c)){
 $('#add-error').textContent='That does not look like a channel code (16-64 letters, digits, - or _).';
 return false}
 $('#add-error').textContent='';
+untombstone(c);
 if(codes.indexOf(c)<0)codes.push(c);
 renderCodes();updateLink();saveAndPaint();return true}
 $('#add-code').addEventListener('click',function(){
@@ -445,7 +471,7 @@ else err.textContent='Could not send: '+(e.message||'error')})
 // localStorage and a cookie for durability — browsers cap JS cookies, Safari ~7 days),
 // merged + self-healed on every load so channels are never accidentally lost. Users can
 // turn it off + clear with "Forget & stop saving". See CLAUDE.md persistence requirement.
-var LS_SAVED='nbw_saved_codes',LS_NOSAVE='nbw_nosave';
+var LS_SAVED='nbw_saved_codes',LS_NOSAVE='nbw_nosave',LS_REMOVED='nbw_removed';
 function setCookie(n,v,days){
 var d=new Date();d.setTime(d.getTime()+days*864e5);
 var sec=location.protocol==='https:'?';Secure':'';
@@ -458,6 +484,12 @@ document.cookie=n+'=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax'}
 function lsSaveArr(k,a){try{localStorage.setItem(k,JSON.stringify(a))}catch(e){}}
 function lsLoadArr(k){try{var v=JSON.parse(localStorage.getItem(k));
 return Array.isArray(v)?v:[]}catch(e){return[]}}
+// Tombstones, shared with the app page /a (same key nbw_removed): a channel the user explicitly
+// removed must not be resurrected by a stale saved store or install-URL fragment on EITHER page.
+// Every explicit add clears the tombstone so a genuine re-add still works.
+function tombstone(c){var a=lsLoadArr(LS_REMOVED);
+if(a.indexOf(c)<0){a.push(c);lsSaveArr(LS_REMOVED,a)}}
+function untombstone(c){lsSaveArr(LS_REMOVED,lsLoadArr(LS_REMOVED).filter(function(x){return x!==c}))}
 function autoSaveOn(){try{return localStorage.getItem(LS_NOSAVE)!=='1'}catch(e){return true}}
 function persistSaved(){if(!autoSaveOn())return;
 setCookie('nbw_codes',codes.join(','),365);lsSaveArr(LS_SAVED,codes)}
@@ -478,9 +510,9 @@ try{localStorage.removeItem(LS_NOSAVE)}catch(e){}persistSaved();paintSaveStatus(
 $('#forget-btn').addEventListener('click',function(){
 clearSaved();try{localStorage.setItem(LS_NOSAVE,'1')}catch(e){}paintSaveStatus()});
 (function loadSaved(){
-var merged=[];
+var removed=lsLoadArr(LS_REMOVED),merged=[];
 (getCookie('nbw_codes')||'').split(',').concat(lsLoadArr(LS_SAVED)).forEach(function(c){
-c=(c||'').trim();if(CODE_RE.test(c)&&merged.indexOf(c)<0)merged.push(c)});
+c=(c||'').trim();if(CODE_RE.test(c)&&removed.indexOf(c)<0&&merged.indexOf(c)<0)merged.push(c)});
 var added=false;
 merged.forEach(function(c){if(codes.indexOf(c)<0){codes.push(c);added=true}});
 if(added){renderCodes();updateLink()}
@@ -516,24 +548,25 @@ open the <strong>Share</strong> menu, choose <strong>Add to Home Screen</strong>
 then open Notify from your Home Screen and enable notifications there.
 </div>
 <div class="banner warn-banner" id="too-old" hidden></div>
+<div id="channels"></div>
 <div class="card" id="notif-card">
 <h2>Notifications</h2>
 <div id="notif-state" class="muted">Notifications are off.</div>
 <button id="enable-btn">Enable notifications</button>
 __COMPAT__
 </div>
-<div id="channels"></div>
 <div class="card">
 <h2>Add a channel</h2>
 <input id="add-input" placeholder="Paste a channel code" autocomplete="off">
 <button id="add-btn">Add channel</button>
 <p class="err" id="add-error"></p>
+<p class="muted">Want a brand-new channel? <a href="/?create">Create one on the start page</a>.</p>
 </div>
 <div class="card muted" id="empty-hint" hidden>
 No channels yet — paste a channel code above, or create one on the
-<a href="/">start page</a>.
+<a href="/?create">start page</a>.
 </div>
-<footer class="muted"><a href="/">Notify start page</a></footer>
+<footer class="muted"><a href="/?create">Notify start page</a></footer>
 __DISCLAIMER__
 </div>
 <script src="/vendor/qrcode.js"></script>
@@ -543,7 +576,8 @@ __DISCLAIMER__
 var VAPID_PUBLIC_KEY='__VAPID_PUBLIC_KEY__';
 var CODE_RE=/^[A-Za-z0-9_-]{16,64}$/;
 var LS_CODES='nbw_codes',LS_REMOVED='nbw_removed',LS_SUB='nbw_subscribed',
-LS_PENDING='nbw_pending_unsub',LS_MUTED='nbw_muted';
+LS_PENDING='nbw_pending_unsub',LS_MUTED='nbw_muted',
+LS_SAVED='nbw_saved_codes',LS_NOSAVE='nbw_nosave';
 var codes=[];
 var _lastSubBody=null;
 function $(s){return document.querySelector(s)}
@@ -558,6 +592,23 @@ return j})})}
 function lsGet(k,d){try{var v=JSON.parse(localStorage.getItem(k));
 return v==null?d:v}catch(e){return d}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+// Shared "my channels" store, kept in sync with the landing page (cookie nbw_codes +
+// localStorage nbw_saved_codes) so returning visitors are routed here from / and so
+// removing a channel on either page sticks. Respects the "stop saving" opt-out.
+function setCookieA(n,v,days){
+var d=new Date();d.setTime(d.getTime()+days*864e5);
+var sec=location.protocol==='https:'?';Secure':'';
+document.cookie=n+'='+encodeURIComponent(v)+';expires='+d.toUTCString()+';path=/;SameSite=Lax'+sec}
+function readSavedStore(){
+var out=[],seen=[];
+var m=document.cookie.match(/(?:^|; )nbw_codes=([^;]*)/);
+if(m){try{decodeURIComponent(m[1]).split(',').forEach(function(c){out.push(c)})}catch(e){}}
+lsGet(LS_SAVED,[]).forEach(function(c){out.push(c)});
+out.forEach(function(c){c=(c||'').trim();if(CODE_RE.test(c)&&seen.indexOf(c)<0)seen.push(c)});
+return seen}
+function mirrorSavedStore(){
+try{if(localStorage.getItem(LS_NOSAVE)==='1')return}catch(e){}
+lsSet(LS_SAVED,codes);setCookieA('nbw_codes',codes.join(','),365)}
 // muted channels (per device): the endpoint is unsubscribed from the channel
 // on the server, so silencing does not rely on dropping pushes in the SW
 function isMuted(code){return lsGet(LS_MUTED,[]).indexOf(code)>=0}
@@ -587,11 +638,19 @@ try{return decodeURIComponent(x)}catch(e){return''}
 
 function loadCodes(){
 var removedArr=lsGet(LS_REMOVED,[]);
-var stored=lsGet(LS_CODES,[]).filter(function(c){return CODE_RE.test(c)});
-parseFragmentCodes().forEach(function(c){
-if(removedArr.indexOf(c)<0&&stored.indexOf(c)<0)stored.push(c)});
+// Build the active set from every passive source — the shared saved store (synced with the
+// landing page) UNION this page's legacy list UNION the URL fragment — so a migrating install
+// never drops a channel that lives in only one of them (e.g. one pasted in-app before the
+// stores were unified). Subtract nbw_removed so a user-removed channel is never resurrected by
+// a stale store or a stale install-URL fragment; de-dupe while preserving order.
+var stored=[],seen=[];
+function take(c){c=(c||'').trim();
+if(CODE_RE.test(c)&&removedArr.indexOf(c)<0&&seen.indexOf(c)<0){seen.push(c);stored.push(c)}}
+readSavedStore().forEach(take);
+lsGet(LS_CODES,[]).forEach(take);
+parseFragmentCodes().forEach(take);
 codes=stored;
-lsSet(LS_CODES,codes)}
+lsSet(LS_CODES,codes);mirrorSavedStore()}
 
 // ------- install identity: data:-URI manifest keeps codes in start_url
 function hashStr(s){var h=5381,i;for(i=0;i<s.length;i++){h=((h<<5)+h+s.charCodeAt(i))>>>0}
@@ -970,6 +1029,7 @@ function addChannel(code){
 if(codes.indexOf(code)>=0)return;
 codes.push(code);lsSet(LS_CODES,codes);
 lsSet(LS_REMOVED,lsGet(LS_REMOVED,[]).filter(function(x){return x!==code}));
+mirrorSavedStore();
 renderChannels();injectManifest();mirrorStateForSW();
 if(lsGet(LS_SUB,false))ensureSubscribed(false)}
 
@@ -988,6 +1048,7 @@ setMuted(code,false);
 var removedArr=lsGet(LS_REMOVED,[]);
 if(removedArr.indexOf(code)<0)removedArr.push(code);
 lsSet(LS_REMOVED,removedArr);
+mirrorSavedStore();
 if('serviceWorker' in navigator){
 navigator.serviceWorker.ready.then(function(r){
 return r.pushManager.getSubscription()}).then(function(s){

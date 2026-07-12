@@ -43,8 +43,15 @@ https://github.com/mghomedev/NotifyByWebApp
 ## Install-URL trick (core UX idea — the app URL carries the channel codes)
 
 The URL used to install the Home Screen app **contains the channel code(s)**:
-`/a#codes=CODE1,CODE2`. The landing page `/` is the generator. It is ordered
-**end-user-first** (top→down = less→more technical): (1) create your channel → shows the
+`/a#codes=CODE1,CODE2`. The landing page `/` is the generator. **Returning visitors**
+whose channels are already saved on this device are routed straight to the app — a `<head>`
+redirect on `/` (`location.replace('/a#codes=…')`, built from the saved store) so the main
+page STARTS with their channels + messages + send, not the create form. The redirect is
+**skipped** on `?create` (the escape hatch every in-app "start page" link uses), when saving
+is opted out (`nbw_nosave`), or when the saved set is empty / all-tombstoned; `/a` never
+redirects back, so there is no loop. On `/a` the channels list (`#channels`) is rendered
+**above** the notifications card so saved channels are the first thing shown. The generator
+is ordered **end-user-first** (top→down = less→more technical): (1) create your channel → shows the
 code + QR + app link together, plus a **visible** "Your channels" list (`#your-channels`
 + `#code-list`, shown whenever there are codes — must NOT be hidden in an expander) and a
 collapsible "Add an existing channel code"; (2) send a message; the auto-save card; the
@@ -59,7 +66,13 @@ last. Both pages also carry a shared no-warranty / free-open-source **disclaimer
    installs). There is deliberately **no static manifest** — it would override the install
    URL with a code-less `start_url`. CSP includes `manifest-src 'self' data:`.
 3. Codes are mirrored to **localStorage** (`nbw_codes`); removed channels are remembered
-   in `nbw_removed` so an install-URL fragment does not resurrect them.
+   in `nbw_removed` (a tombstone set **shared by both pages** — the generator writes it on
+   Remove and clears it on any explicit add, `/a` likewise) so a stale saved store or
+   install-URL fragment does not resurrect a removed channel on either page. `/a`'s
+   `loadCodes()` builds its active set as the **union** of the shared saved store
+   (`readSavedStore()`), this page's legacy `nbw_codes` list, and the fragment, then subtracts
+   `nbw_removed` — so a channel that lives in only one store (e.g. one pasted in-app before the
+   stores were unified) is never dropped, and a removed one is never resurrected.
 4. Final fallback (matters on iOS, where the installed app has separate storage): in-app
    “Add a channel” by pasting a code.
 5. Per-device **mute** (`nbw_muted`): each channel card has a 🔔/🔕 Mute toggle. Muting
@@ -80,6 +93,15 @@ Users trust that saved channels persist locally; losing that state loses their c
   restored) and refreshes the cookie window. A clear status ("✅ N channels saved on this
   device") plus a create-time confirmation shows it. Users opt OUT via **Forget & stop
   saving** (clears both + sets `nbw_nosave`); a **Save my channels here** button re-enables.
+- This **cookie `nbw_codes` + localStorage `nbw_saved_codes`** pair is now the **shared store
+  read/written by BOTH pages**. `/a` reads it (`readSavedStore()`) as one source of its
+  `loadCodes()` union and **mirrors** the current channel set back to it on every
+  load/add/remove (`mirrorSavedStore()`), honouring the same `nbw_nosave` opt-out — so a
+  channel created/added/removed on either page converges on the other, and the `/` →
+  `/a` returning-visitor redirect reads it. (The `nbw_codes` **cookie** rides in request
+  headers, but that is not a new leak: every `/api` POST already carries the raw code in its
+  body — the code is a bearer capability the server needs — and the guarded invariant is
+  codes-never-in-**URLs**/logs, not codes-never-in-cookies.)
 - **Never** rename, clear, or change the FORMAT of these keys without a migration that
   preserves existing data; never clear them implicitly; keep this code stable across
   releases. Treat it as load-bearing user data.
@@ -213,7 +235,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 176 tests
+## Tests (pytest; must be green before every deploy) — 183 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends
@@ -233,8 +255,12 @@ Users trust that saved channels persist locally; losing that state loses their c
   a VISIBLE "Your channels" list, developer section, **auto-save** persistence + survival of
   cookie- or localStorage-loss + Forget/re-enable, app page from fragment, manifest
   injection, shareable labelled QR, message order + local timestamps, channel sorting by
-  latest activity, message delete + clear-all + "More" expander, send-password UI, and the
-  **live auto-refresh → in-app toast (Go/Reply/Delete) + one-per-channel highlight**.
+  latest activity, message delete + clear-all + "More" expander, send-password UI, the
+  **live auto-refresh → in-app toast (Go/Reply/Delete) + one-per-channel highlight**, and the
+  **`/` → `/a` returning-visitor redirect** (with `/?create` escape hatch + `nbw_nosave`
+  suppression), the **shared-store union** (a channel in only the legacy list OR only the
+  cross-page store still renders on `/a`), and the **shared tombstone** (a channel removed on
+  the generator is not resurrected on `/a` by a stale fragment).
 - `tests/test_ui_notifications.py` + `tests/uikit.py` — **HEADED** Chromium (headless denies
   notification permission): delivers a real push into the SW via CDP
   `ServiceWorker.deliverPushMessage` and asserts the displayed notification’s

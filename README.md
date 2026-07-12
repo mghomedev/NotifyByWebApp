@@ -93,9 +93,11 @@ Safari browser tab. The app detects an unsupported/too-old device and shows a cl
 Your channels are **saved automatically** on the start page (no opt-in) — stored in this
 browser's **local storage and a cookie**, re-saved and self-healed on every visit, so you
 won't lose them. A confirmation ("✅ Saved on this device") is shown. They are never sent
-anywhere for safekeeping. To stop and clear them (e.g. on a shared computer) use **Forget &
-stop saving**; **Save my channels here** turns saving back on, and a channel's **Remove**
-button drops just that one. Browsers can still clear local storage on their own (Safari, for
+anywhere for safekeeping. Once you have saved channels, the start page takes you **straight to
+them** (your channels, their messages, and a send box) instead of the create form — use the
+**"Create one on the start page"** link to make another. To stop and clear them (e.g. on a
+shared computer) use **Forget & stop saving**; **Save my channels here** turns saving back on,
+and a channel's **Remove** button drops just that one. Browsers can still clear local storage on their own (Safari, for
 example, limits script-set cookies to ~7 days), so **your real backup is the channel code /
 app-link QR** — keep those and you can always restore a channel.
 

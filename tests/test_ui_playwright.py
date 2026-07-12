@@ -89,17 +89,21 @@ def test_landing_send_message_and_autosave(server, page):
     assert snap["messages"][0]["title"] == "Hello from landing"
 
     # returning to the page restores the channel automatically (no save click)
-    # AND lists it visibly (regression: it must not be hidden in an expander)
-    page.goto(server.base + "/")
+    # AND lists it visibly on the generator (regression: it must not be hidden in an
+    # expander). We use /?create because a bare / now routes returning visitors with
+    # saved channels straight to the app (covered by the redirect test below).
+    page.goto(server.base + "/?create")
     page.wait_for_selector("#link-result:not([hidden])")
     assert code in page.text_content("#app-url")
     assert page.is_visible("#your-channels")
     assert page.locator("#code-list .codes-item").first.is_visible()
     assert code in page.text_content("#code-list")
 
-    # "Forget & stop saving" clears them and turns saving off
+    # "Forget & stop saving" clears them and turns saving off — and, because the opt-out
+    # flag also disables the returning-visitor redirect, a bare / stays on the generator
     page.click("#forget-btn")
     page.goto(server.base + "/")
+    assert "/a" not in page.url
     assert page.is_hidden("#link-result")
     assert "off" in page.text_content("#save-status").lower()
     assert page.is_visible("#save-btn")  # re-enable button offered
@@ -110,7 +114,7 @@ def test_landing_send_message_and_autosave(server, page):
     page.click("#create-btn")
     page.wait_for_selector("#create-result:not([hidden])")
     code2 = page.text_content("#new-code").strip()
-    page.goto(server.base + "/")
+    page.goto(server.base + "/?create")
     page.wait_for_selector("#link-result:not([hidden])")
     assert code2 in page.text_content("#app-url")
 
@@ -125,9 +129,11 @@ def test_landing_autosaved_channels_survive_cookie_loss(server, page):
     assert any(c["name"] == "nbw_codes" for c in page.context.cookies())
     assert code in (page.evaluate("localStorage.getItem('nbw_saved_codes')") or "")
 
-    # survives losing the cookie (e.g. Safari's ~7-day cap on JS cookies)
+    # survives losing the cookie (e.g. Safari's ~7-day cap on JS cookies). Reopen the
+    # generator via /?create (a bare / would route us to the app now that a channel is
+    # saved); localStorage restores the channel and re-heals the cookie.
     page.context.clear_cookies()
-    page.reload()
+    page.goto(server.base + "/?create")
     page.wait_for_selector("#link-result:not([hidden])")
     assert code in page.text_content("#app-url")
     assert any(c["name"] == "nbw_codes" for c in page.context.cookies())  # cookie healed
@@ -139,12 +145,118 @@ def test_landing_autosaved_channels_survive_localstorage_loss(server, page):
     page.click("#create-btn")
     page.wait_for_selector("#create-result:not([hidden])")
     code = page.text_content("#new-code").strip()
-    # drop only localStorage; the cookie restores it, and the heal rewrites localStorage
+    # drop only localStorage; the cookie restores it, and the heal rewrites localStorage.
+    # Reopen via /?create so we stay on the generator (a bare / would route to the app).
     page.evaluate("localStorage.removeItem('nbw_saved_codes')")
-    page.reload()
+    page.goto(server.base + "/?create")
     page.wait_for_selector("#link-result:not([hidden])")
     assert code in page.text_content("#app-url")
     assert code in (page.evaluate("localStorage.getItem('nbw_saved_codes')") or "")
+
+
+def test_landing_routes_returning_visitor_to_saved_channels(server, page):
+    # a fresh visitor (no saved channels) sees the generator, not a redirect
+    page.goto(server.base + "/")
+    page.wait_for_selector("#create-btn")
+    assert "/a" not in page.url
+
+    # create a channel — it is auto-saved to the cookie + localStorage
+    page.fill("#channel-name", "Homecoming")
+    page.click("#create-btn")
+    page.wait_for_selector("#create-result:not([hidden])")
+    code = page.text_content("#new-code").strip()
+
+    # a returning visit to a bare / now routes straight into the app, so the page STARTS
+    # with the user's saved channels + their messages + send, not the create form
+    page.goto(server.base + "/", wait_until="commit")
+    page.wait_for_selector(".channel")
+    assert "/a#codes=" in page.url
+    assert code in page.url
+
+    # /?create is the escape hatch: it always shows the generator (to make a new channel),
+    # and still lists the saved channel visibly there
+    page.goto(server.base + "/?create")
+    page.wait_for_selector("#create-btn")
+    assert "/a" not in page.url
+    assert page.is_visible("#your-channels")
+    assert code in page.text_content("#code-list")
+    # the prominent "Open my channels & messages" button is shown and points at the app URL
+    assert page.is_visible("#have-channels")
+    assert page.get_attribute("#open-app-top", "href").endswith("/a#codes=" + code)
+
+
+def test_landing_nosave_disables_redirect_even_with_saved_channels(server, page):
+    # opting out of saving must suppress the returning-visitor redirect even while channels are
+    # still present in the store (isolates the nbw_nosave guard from the empty-store guard)
+    code = server.post("/api/channel", {"name": "OptOut"}).json["code"]
+    page.goto(server.base + "/?create")
+    page.evaluate(
+        "(c)=>{localStorage.setItem('nbw_saved_codes',JSON.stringify([c]));"
+        "document.cookie='nbw_codes='+c+';path=/';"
+        "localStorage.setItem('nbw_nosave','1');}",
+        code,
+    )
+    page.goto(server.base + "/")
+    page.wait_for_selector("#create-btn")
+    assert "/a" not in page.url  # generator shown, not routed to the app
+
+
+def test_app_page_unions_shared_store_and_legacy_list(server, page):
+    # A channel that lives only in the app's legacy list (e.g. pasted in-app before the stores
+    # were unified) must NOT be dropped when a different channel lives in the shared store.
+    a = server.post("/api/channel", {"name": "SharedA"}).json["code"]
+    b = server.post("/api/channel", {"name": "LegacyB"}).json["code"]
+    page.goto(server.base + "/a")  # establish the origin so localStorage/cookies are writable
+    page.evaluate(
+        "([a,b])=>{localStorage.setItem('nbw_saved_codes',JSON.stringify([a]));"
+        "document.cookie='nbw_codes='+a+';path=/';"
+        "localStorage.setItem('nbw_codes',JSON.stringify([b]));}",
+        [a, b],
+    )
+    page.goto(server.base + "/a")  # no fragment: loadCodes must UNION shared store + legacy list
+    page.wait_for_selector(".channel h2:has-text('SharedA')")
+    page.wait_for_selector(".channel h2:has-text('LegacyB')")
+
+
+def test_app_page_loads_from_shared_store_without_legacy_or_fragment(server, page):
+    # A channel present ONLY in the cross-page shared store (cookie nbw_codes + LS nbw_saved_codes)
+    # must render on /a with no fragment and no legacy LS_CODES — isolates readSavedStore().
+    code = server.post("/api/channel", {"name": "SharedOnly"}).json["code"]
+    page.goto(server.base + "/a")
+    page.evaluate(
+        "(c)=>{localStorage.setItem('nbw_saved_codes',JSON.stringify([c]));"
+        "document.cookie='nbw_codes='+c+';path=/';"
+        "localStorage.removeItem('nbw_codes');}",
+        code,
+    )
+    page.goto(server.base + "/a")
+    page.wait_for_selector(".channel h2:has-text('SharedOnly')")
+
+
+def test_landing_removal_tombstones_so_app_does_not_resurrect(server, page):
+    # Removing a channel on the landing page must record a shared tombstone so a stale install-URL
+    # fragment (or the app's legacy list) cannot resurrect it on /a.
+    code = server.post("/api/channel", {"name": "ToRemove"}).json["code"]
+    page.goto(server.base + "/a#codes=" + code)  # app now has it in LS_CODES + shared store
+    page.wait_for_selector(".channel h2:has-text('ToRemove')")
+    page.goto(server.base + "/?create")  # go to the generator and remove it there
+    page.wait_for_selector("#code-list .codes-item")
+    page.click("#code-list .codes-item button.danger")
+    page.wait_for_selector("#code-list .codes-item", state="detached")
+    # reopen the app via the STALE fragment: the removed channel must NOT come back
+    page.goto(server.base + "/a#codes=" + code)
+    page.wait_for_selector("#empty-hint:not([hidden])")
+    assert page.query_selector(".channel") is None
+
+
+def test_app_page_escape_hatch_link_reaches_generator(server, page, channel):
+    # From the installed app, the "start page" link must reach the generator (/?create), NOT get
+    # bounced straight back to /a by the returning-visitor redirect.
+    page.goto(server.base + "/a#codes=" + channel)
+    page.wait_for_selector(".channel")
+    page.click("footer a:has-text('start page')")
+    page.wait_for_selector("#create-btn")  # would time out if it bounced back to /a
+    assert "create" in page.url
 
 
 def test_app_page_renders_channel_and_sends(server, page, channel):
