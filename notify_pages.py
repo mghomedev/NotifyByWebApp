@@ -57,6 +57,22 @@ f&uuml;r Sch&auml;den ist &ndash; soweit gesetzlich zul&auml;ssig &ndash;
 ausgeschlossen.</p>
 </div>"""
 
+# Compatibility list (shared on both pages via the __COMPAT__ placeholder).
+# Minimum versions verified 2026 — see CLAUDE.md "Web Push facts".
+COMPAT_HTML = """<details class="compat">
+<summary>Which devices can receive notifications?</summary>
+<p class="muted">Notifications use the browser's built-in Web Push. Minimum versions:</p>
+<div class="compat-scroll"><table class="compat-table">
+<tr><th>iPhone</th><td>iOS <strong>16.4</strong>+ (2023) &mdash; must be added to the Home Screen</td></tr>
+<tr><th>iPad</th><td>iPadOS <strong>16.4</strong>+ (2023) &mdash; must be added to the Home Screen</td></tr>
+<tr><th>Mac</th><td>Safari <strong>16.1</strong>+ on macOS 13 Ventura or newer, or Chrome / Firefox / Edge</td></tr>
+<tr><th>Android</th><td>Chrome, Firefox, Edge, Opera or Samsung Internet (Android <strong>10</strong>+ recommended)</td></tr>
+<tr><th>Windows / Linux</th><td>Chrome <strong>52</strong>+, Firefox <strong>44</strong>+, Edge <strong>17</strong>+, Opera <strong>42</strong>+</td></tr>
+</table></div>
+<p class="muted">On iPhone and iPad you must open this app from its Home Screen icon &mdash;
+web push does not work in a Safari browser tab.</p>
+</details>"""
+
 ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
 <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
 <stop offset="0" stop-color="#6366F1"/><stop offset="1" stop-color="#4338CA"/>
@@ -153,6 +169,15 @@ font-size:.72rem;line-height:1.55;color:var(--muted)}
 .disclaimer p:last-child{margin-bottom:0}
 .disclaimer strong{color:var(--text)}
 .disclaimer a{color:var(--accent)}
+.compat{margin:14px 0}
+.compat>summary{cursor:pointer;color:var(--accent);font-weight:600}
+.compat-scroll{overflow-x:auto}
+.compat-table{width:100%;border-collapse:collapse;font-size:.85rem;margin:8px 0}
+.compat-table th{text-align:left;white-space:nowrap;color:var(--text);vertical-align:top}
+.compat-table td{color:var(--muted)}
+.compat-table th,.compat-table td{padding:7px 12px 7px 0;border-top:1px solid var(--border)}
+.compat-table tr:first-child th,.compat-table tr:first-child td{border-top:0}
+.warn-banner{background:#b45309}
 """
 
 _HEAD_COMMON = (
@@ -276,6 +301,8 @@ trust.</p>
 </div>
 <p class="muted" id="save-status"></p>
 </div>
+
+<div class="card">__COMPAT__</div>
 
 <footer class="muted">Free &amp; open-source hobby project &middot;
 <a href="https://github.com/mghomedev/NotifyByWebApp" rel="noopener">Source on GitHub</a></footer>
@@ -431,10 +458,12 @@ On iPhone/iPad, notifications only work for installed web apps:
 open the <strong>Share</strong> menu, choose <strong>Add to Home Screen</strong>,
 then open Notify from your Home Screen and enable notifications there.
 </div>
+<div class="banner warn-banner" id="too-old" hidden></div>
 <div class="card" id="notif-card">
 <h2>Notifications</h2>
 <div id="notif-state" class="muted">Notifications are off.</div>
 <button id="enable-btn">Enable notifications</button>
+__COMPAT__
 </div>
 <div id="channels"></div>
 <div class="card">
@@ -534,6 +563,31 @@ function isStandalone(){return navigator.standalone===true||
 (window.matchMedia&&matchMedia('(display-mode: standalone)').matches)}
 function pushSupported(){return 'serviceWorker' in navigator&&
 'PushManager' in window&&'Notification' in window}
+// --- device compatibility (feature detection is authoritative; UA parsing only
+// picks the wording of a too-old warning). Verified minimums 2026.
+function iosVer(){var m=navigator.userAgent.match(/(?:CPU iPhone OS|CPU OS) (\\d+)[_.](\\d+)/);
+return m?[parseInt(m[1],10),parseInt(m[2],10)]:null}
+function iosAtLeast(a,b){var v=iosVer();if(!v)return null;
+return v[0]>a||(v[0]===a&&v[1]>=b)}
+function isIPhoneUA(){return /iP(hone|od)/.test(navigator.userAgent)}
+function isIPadDevice(){return /iPad/.test(navigator.userAgent)||
+(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)}
+function pushStatus(){
+if(pushSupported())return{supported:true};
+if(isIPhoneUA()&&iosAtLeast(16,4)===false)return{supported:false,reason:'ios-too-old'};
+if(isIOS()&&!isStandalone())return{supported:false,reason:'ios-needs-install'};
+if(isIPadDevice())return{supported:false,reason:isStandalone()?'ipad-too-old':'ios-needs-install'};
+if(/Android/.test(navigator.userAgent))return{supported:false,reason:'android-too-old'};
+return{supported:false,reason:'browser-unsupported'}}
+function applyCompat(){
+var s=pushStatus(),b=$('#too-old');
+if(s.supported||s.reason==='ios-needs-install'){b.hidden=true;return}
+var m;
+if(s.reason==='ios-too-old')m='\\u26A0 This iPhone is too old for notifications. Web Push needs iOS 16.4 or newer (2023). Please update iOS, or use a newer device.';
+else if(s.reason==='ipad-too-old')m='\\u26A0 This iPad is too old for notifications. Web Push needs iPadOS 16.4 or newer (2023). Please update iPadOS, or use a newer device.';
+else if(s.reason==='android-too-old')m='\\u26A0 Your Android browser cannot show notifications. Please update Chrome, Firefox, or Samsung Internet (Android 10 or newer recommended).';
+else m='\\u26A0 This browser cannot show web push notifications. Use a recent Chrome, Firefox, Edge, or Safari 16.1+ (macOS Ventura or newer).';
+b.textContent=m;b.hidden=false}
 function urlB64ToU8(s){
 var pad='='.repeat((4-s.length%4)%4);
 var b=atob((s+pad).replace(/-/g,'+').replace(/_/g,'/'));
@@ -852,6 +906,7 @@ drainPendingUnsub();
 if('serviceWorker' in navigator){
 navigator.serviceWorker.register('/sw.js').catch(function(){})}
 if(isIOS()&&!isStandalone()){$('#ios-hint').hidden=false}
+applyCompat();
 if(pushSupported()&&Notification.permission==='granted'&&lsGet(LS_SUB,false)){
 ensureSubscribed(false).catch(function(){updateNotifUI('off')})}
 else if(pushSupported()&&Notification.permission==='denied'){updateNotifUI('blocked')}
@@ -952,13 +1007,15 @@ body:JSON.stringify({code:code,subscription:body})}).catch(function(){})}))})})
 
 
 def index_html() -> str:
-    return INDEX_HTML.replace("__DISCLAIMER__", DISCLAIMER_HTML)
+    return INDEX_HTML.replace("__DISCLAIMER__", DISCLAIMER_HTML).replace(
+        "__COMPAT__", COMPAT_HTML
+    )
 
 
 def app_html(vapid_public_key: str) -> str:
     key = re.sub(r"[^A-Za-z0-9_-]", "", vapid_public_key or "")
     return (
-        _APP_HTML_TEMPLATE.replace("__VAPID_PUBLIC_KEY__", key).replace(
-            "__DISCLAIMER__", DISCLAIMER_HTML
-        )
+        _APP_HTML_TEMPLATE.replace("__VAPID_PUBLIC_KEY__", key)
+        .replace("__DISCLAIMER__", DISCLAIMER_HTML)
+        .replace("__COMPAT__", COMPAT_HTML)
     )

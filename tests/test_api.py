@@ -428,6 +428,22 @@ def test_disclaimer_on_both_pages(server):
         assert "__DISCLAIMER__" not in html  # placeholder was substituted
 
 
+def test_compatibility_list_on_both_pages(server):
+    for path in ("/", "/a"):
+        html = server.get(path).raw.decode("utf-8")
+        assert "Which devices can receive notifications" in html
+        assert "16.4" in html  # iOS/iPadOS minimum
+        assert "16.1" in html and "Ventura" in html  # macOS Safari
+        assert "Android" in html and "Chrome" in html
+        assert "__COMPAT__" not in html  # placeholder substituted
+
+
+def test_app_page_has_too_old_banner_element(server):
+    html = server.get("/a").raw.decode("utf-8")
+    assert 'id="too-old"' in html
+    assert "iosAtLeast" in html and "pushStatus" in html  # detection logic present
+
+
 def test_service_worker_served_correctly(server):
     resp = server.get("/sw.js")
     assert resp.status == 200

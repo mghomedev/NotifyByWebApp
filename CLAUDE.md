@@ -105,6 +105,17 @@ codes, get the app URL + QR. Implementation layers (all implemented in notify_pa
   `push_disabled: true` returned (local dev works without keys).
 - `publish()` stores the message first; a storage error AFTER the store (touch/get_subs) is
   swallowed (returns `push_error`) so a retry can’t duplicate the message.
+- **Compatibility list + too-old warning** (`COMPAT_HTML` on both pages via `__COMPAT__`;
+  `pushStatus()`/`applyCompat()` on `/a`). Verified minimums (2026): iPhone iOS **16.4**+
+  (installed), iPad iPadOS **16.4**+ (installed), Mac Safari **16.1**+ on macOS 13 Ventura+
+  (or Chrome/Firefox/Edge), Android any modern browser (Android **10**+ floor), desktop
+  Chrome **52**+/Firefox **44**+/Edge **17**+/Opera **42**+. Detection: feature-detection
+  (`pushSupported`) is authoritative; UA parsing only picks the warning wording — iPhone
+  version from `CPU iPhone OS (\d+)_(\d+)` (iOS 26+ freezes this token, so only trust
+  `>=16.4` as "new enough"), iPad version is unreadable (reports as Mac → `maxTouchPoints`),
+  Android version informational. `#too-old` amber banner warns on iPhone<16.4 / iPad-too-old
+  / unsupported Android/desktop browser; a too-new-but-not-installed iPhone gets the install
+  hint instead.
 - **iOS**: Web Push only for Home-Screen-installed PWAs since iOS 16.4; `Notification`/
   `PushManager` absent in the Safari tab → the app shows install instructions
   (`isIOS() && !isStandalone()`, enable button hidden); permission request must come from a

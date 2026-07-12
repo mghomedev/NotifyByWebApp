@@ -46,6 +46,53 @@ Object.defineProperty(navigator, 'standalone', {configurable:true, get:()=>false
 """
 
 
+IOS15_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1"
+)
+ANDROID6_UA = (
+    "Mozilla/5.0 (Linux; Android 6.0; SM-G900) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/50.0 Mobile Safari/537.36"
+)
+
+
+def test_old_iphone_shows_too_old_warning(browser, server, channel):
+    ctx = browser.new_context(user_agent=IOS15_UA, has_touch=True)
+    ctx.add_init_script(STRIP_PUSH_APIS)
+    try:
+        page = ctx.new_page()
+        page.goto(server.base + "/a#codes=" + channel)
+        page.wait_for_selector("#too-old:not([hidden])")
+        txt = page.text_content("#too-old")
+        assert "too old" in txt.lower() and "16.4" in txt and "iPhone" in txt
+    finally:
+        ctx.close()
+
+
+def test_old_android_shows_too_old_warning(browser, server, channel):
+    ctx = browser.new_context(user_agent=ANDROID6_UA, has_touch=True)
+    ctx.add_init_script(STRIP_PUSH_APIS)
+    try:
+        page = ctx.new_page()
+        page.goto(server.base + "/a#codes=" + channel)
+        page.wait_for_selector("#too-old:not([hidden])")
+        assert "Android" in page.text_content("#too-old")
+    finally:
+        ctx.close()
+
+
+def test_modern_installed_device_has_no_too_old_warning(browser, server, channel):
+    ctx = browser.new_context(user_agent=IPHONE_UA, has_touch=True)
+    ctx.add_init_script(FAKE_STANDALONE_PUSH)  # push primitives present => supported
+    try:
+        page = ctx.new_page()
+        page.goto(server.base + "/a#codes=" + channel)
+        page.wait_for_selector(".channel")
+        assert page.is_hidden("#too-old")
+    finally:
+        ctx.close()
+
+
 def test_ios_safari_tab_shows_install_instructions(browser, server, channel):
     ctx = browser.new_context(
         user_agent=IPHONE_UA,
