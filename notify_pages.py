@@ -147,6 +147,27 @@ padding:2px 6px;margin:0;color:var(--muted)}
 .more-msgs>summary{margin:8px 0 2px}
 .msg-title{font-weight:600}
 .msg-body{white-space:pre-wrap}
+.msg-new{border-left:3px solid var(--accent);padding-left:8px;
+background:rgba(99,102,241,.10);border-radius:8px}
+.msg-new-badge{display:inline-block;margin-left:6px;font-size:.6rem;font-weight:700;
+color:#fff;background:var(--accent);border-radius:5px;padding:1px 5px;vertical-align:middle;
+letter-spacing:.03em}
+#toasts{position:fixed;top:8px;left:0;right:0;z-index:60;display:flex;
+flex-direction:column;align-items:center;gap:8px;padding:0 10px;pointer-events:none}
+.toast{position:relative;pointer-events:auto;width:100%;max-width:600px;
+background:var(--accent);color:#fff;border-radius:12px;padding:10px 34px 10px 14px;
+box-shadow:0 8px 24px rgba(0,0,0,.28);animation:toastin .22s ease}
+.toast-title{font-weight:700;font-size:.9rem}
+.toast-body{font-size:.85rem;opacity:.95;margin-top:2px;overflow-wrap:anywhere;
+display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.toast-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.toast-btn{background:rgba(255,255,255,.18);color:#fff;border:0;border-radius:8px;
+padding:5px 10px;font:inherit;font-size:.8rem;font-weight:600;cursor:pointer;margin:0}
+.toast-btn:active{background:rgba(255,255,255,.32)}
+.toast-del{background:rgba(0,0,0,.22)}
+.toast-x{position:absolute;top:6px;right:8px;background:transparent;border:0;color:#fff;
+font-size:1.15rem;line-height:1;cursor:pointer;opacity:.85;padding:0}
+@keyframes toastin{from{transform:translateY(-8px);opacity:0}to{transform:none;opacity:1}}
 .msg-time{color:var(--muted);font-size:.78rem;margin-bottom:3px}
 .msg-rel{opacity:.85}
 .msgs-hint{font-size:.72rem;color:var(--muted);text-align:right;margin-bottom:2px}
@@ -469,6 +490,7 @@ _APP_HTML_TEMPLATE = (
     + """<title>Notify</title>
 </head>
 <body>
+<div id="toasts"></div>
 <div class="wrap">
 <header><img src="/icon.svg" alt=""><h1>Notify</h1></header>
 <noscript><div class="banner">This app needs JavaScript.</div></noscript>
@@ -699,6 +721,37 @@ else if(diff<86400)rel=Math.floor(diff/3600)+' h ago';
 else rel=Math.floor(diff/86400)+' d ago';
 return{abs:abs,rel:rel}}
 
+// in-app "new message" sign with actions (works even with OS notifications off)
+function findCard(code){return document.querySelector('.channel[data-code="'+code+'"]')}
+function showToast(code,chan,msg,extra){
+var wrap=$('#toasts');if(!wrap)return;
+var t=el('div','toast');
+t.appendChild(el('div','toast-title','New message in '+chan+(extra||'')));
+var content=(msg.title||'')+((msg.title&&msg.body)?' / ':'')+(msg.body||'');
+if(content)t.appendChild(el('div','toast-body',content));
+var acts=el('div','toast-acts');
+var go=el('button','toast-btn','Go to channel');
+go.addEventListener('click',function(){var c=findCard(code);
+if(c)c.scrollIntoView({behavior:'smooth',block:'start'})});
+var reply=el('button','toast-btn','Reply');
+reply.addEventListener('click',function(){var c=findCard(code);if(!c)return;
+var det=c.querySelector('.send-details');if(det)det.open=true;
+c.scrollIntoView({behavior:'smooth',block:'start'});
+var inp=c.querySelector('.send-details input');if(inp)setTimeout(function(){inp.focus()},350)});
+var del=el('button','toast-btn toast-del','Delete');
+del.addEventListener('click',function(){
+var c=findCard(code);
+api('/api/message/delete',{code:code,id:msg.id,send_password:c?deletePw(c):''})
+.then(function(){refreshChannel(code,true);t.remove()})
+.catch(function(e){alert((e&&e.status===403)?'Wrong or missing send password.':'Could not delete.')})});
+acts.appendChild(go);acts.appendChild(reply);acts.appendChild(del);
+t.appendChild(acts);
+var x=el('button','toast-x','\\u00d7');x.setAttribute('aria-label','Dismiss');
+x.addEventListener('click',function(){t.remove()});
+t.appendChild(x);
+wrap.appendChild(t);
+setTimeout(function(){if(t.parentNode)t.remove()},14000)}
+
 // ------- channels UI
 function channelCard(code){
 var card=el('div','card channel');card.setAttribute('data-code',code);
@@ -724,7 +777,7 @@ if(navigator.clipboard)navigator.clipboard.writeText(shareUrl).then(function(){
 scopy.textContent='Copied!';setTimeout(function(){scopy.textContent='Copy share link'},1200)})});
 share.appendChild(scopy);
 card.appendChild(share);
-var d=document.createElement('details');
+var d=document.createElement('details');d.className='send-details';
 d.appendChild(el('summary','','Send a message'));
 var ti=el('input');ti.placeholder='Title (optional)';ti.maxLength=120;
 var bo=document.createElement('textarea');bo.placeholder='Message (optional if a title is given)';
@@ -741,7 +794,7 @@ api('/api/message',{code:code,title:ti.value,body:bo.value,url:ur.value,send_pas
 .then(function(j){
 ti.value='';bo.value='';ur.value='';
 serr.textContent='Sent to '+j.sent+' device(s).';
-refreshChannel(code)})
+refreshChannel(code,true)})
 .catch(function(e){
 serr.textContent=(e&&e.status===403)?'This channel requires a valid send password.':('Error: '+e.message)})
 .then(function(){se.disabled=false})});
@@ -790,7 +843,7 @@ if(!v&&card.getAttribute('data-protected')==='1'){
 v=prompt('This channel needs its send password to delete messages:')||''}
 return v}
 
-function refreshChannel(code){
+function refreshChannel(code,silent){
 var card=document.querySelector('.channel[data-code="'+code+'"]');
 if(!card)return;
 api('/api/messages',{code:code,limit:20}).then(function(j){
@@ -801,9 +854,34 @@ if(_sc)_sc.textContent='for Channel: '+cname;
 var prot=!!(j.channel&&j.channel.send_protected);
 card.setAttribute('data-protected',prot?'1':'0');
 var _pw=card.querySelector('.send-pw');if(_pw)_pw.hidden=!prot;
-var _sum=card.querySelector('details summary');
+var _sum=card.querySelector('.send-details summary');
 if(_sum)_sum.textContent=prot?'Send a message (password required)':'Send a message';
 card.querySelector('.stats').textContent=j.subscribers+' subscribed device(s)';
+var latest=(j.messages[0]&&j.messages[0].ts)||j.channel.created||0;
+card.setAttribute('data-ts',String(latest));
+if(latest){var lt=fmtTime(latest);
+card.querySelector('.channel-latest').textContent='Latest: '+lt.abs+' \\u00b7 '+lt.rel}
+sortChannels();
+// in-app "new message" sign: only for genuinely NEW arrivals — never the first
+// baseline load, the user's own send/delete (which pass silent), or muted channels
+var newestId=j.messages[0]?j.messages[0].id:'';
+var seen=card.getAttribute('data-seen');
+if(seen===null){card.setAttribute('data-seen',newestId)}
+else if(newestId&&newestId!==seen){
+if(!silent){
+// highlight this recent arrival (at most one per channel — the newest)
+card.setAttribute('data-newid',newestId);
+if(!isMuted(code)){
+var idx=j.messages.map(function(m){return m.id}).indexOf(seen);
+var nnew=(idx>=1)?idx:1;var top=j.messages[0];
+showToast(code,cname,top,nnew>1?(' (+'+(nnew-1)+' more)'):'')}}
+card.setAttribute('data-seen',newestId)}
+// only rebuild the message list when it actually changed (no flicker / no
+// collapsing the "More" expander on every poll)
+var sig=j.messages.map(function(m){return m.id+':'+m.ts}).join(',');
+if(card.getAttribute('data-msgsig')===sig)return;
+card.setAttribute('data-msgsig',sig);
+var hlId=card.getAttribute('data-newid');  // the one message to highlight
 var msgs=card.querySelector('.msgs');msgs.textContent='';
 if(!j.messages.length){msgs.appendChild(el('div','muted','No messages yet.'))}
 else{
@@ -814,22 +892,23 @@ clr.title='Delete all messages';clr.setAttribute('aria-label','Delete all messag
 clr.addEventListener('click',function(){
 if(!confirm('Delete ALL messages in this channel? This cannot be undone.'))return;
 api('/api/messages/clear',{code:code,send_password:deletePw(card)})
-.then(function(){refreshChannel(code)})
+.then(function(){refreshChannel(code,true)})
 .catch(function(e){alert((e&&e.status===403)?'Wrong or missing send password.':'Could not delete messages.')})});
 hdr.appendChild(clr);msgs.appendChild(hdr)}
 function mkMsg(m){
-var d=el('div','msg');
+var d=el('div','msg'+(m.id===hlId?' msg-new':''));
 var del=el('button','iconbtn msg-del','\\uD83D\\uDDD1');
 del.title='Delete this message';del.setAttribute('aria-label','Delete this message');
 del.addEventListener('click',function(){
 if(!confirm('Delete this message?'))return;
 api('/api/message/delete',{code:code,id:m.id,send_password:deletePw(card)})
-.then(function(){refreshChannel(code)})
+.then(function(){refreshChannel(code,true)})
 .catch(function(e){alert((e&&e.status===403)?'Wrong or missing send password.':'Could not delete message.')})});
 d.appendChild(del);
 var t=fmtTime(m.ts);
 var time=el('div','msg-time',t.abs);
 time.appendChild(el('span','msg-rel',' \\u00b7 '+t.rel));
+if(m.id===hlId)time.appendChild(el('span','msg-new-badge','NEW'));
 d.appendChild(time);
 if(m.title)d.appendChild(el('div','msg-title',m.title));
 if(m.body)d.appendChild(el('div','msg-body',m.body));
@@ -850,7 +929,7 @@ delOld.title='Delete all older messages';delOld.setAttribute('aria-label','Delet
 delOld.addEventListener('click',function(){
 if(!confirm('Delete all older messages? (keeps the newest '+VIS+')'))return;
 api('/api/messages/clear',{code:code,keep:VIS,send_password:deletePw(card)})
-.then(function(){refreshChannel(code)})
+.then(function(){refreshChannel(code,true)})
 .catch(function(e){alert((e&&e.status===403)?'Wrong or missing send password.':'Could not delete messages.')})});
 oh.appendChild(delOld);more.appendChild(oh);
 j.messages.slice(VIS).forEach(function(m){more.appendChild(mkMsg(m))});
@@ -916,14 +995,28 @@ loadCodes();renderChannels();injectManifest();mirrorStateForSW();
 if(lsGet(LS_SUB,false))ensureSubscribed(false)});
 window.addEventListener('online',drainPendingUnsub);
 
+// ------- auto-refresh: poll all displayed channels while the tab is visible,
+// so new messages appear (and toast) even when OS notifications are off
+var POLL_MS=(typeof window.__NBW_POLL_MS==='number'&&window.__NBW_POLL_MS>=300)
+?window.__NBW_POLL_MS:20000;
+function pollAll(){codes.forEach(function(c){refreshChannel(c)})}
+function startPolling(){setInterval(function(){
+if(document.visibilityState==='visible')pollAll()},POLL_MS)}
+document.addEventListener('visibilitychange',function(){
+if(document.visibilityState==='visible')pollAll()});
+
 // ------- init
 loadCodes();
 injectManifest();
 renderChannels();
 mirrorStateForSW();
 drainPendingUnsub();
+startPolling();
 if('serviceWorker' in navigator){
-navigator.serviceWorker.register('/sw.js').catch(function(){})}
+navigator.serviceWorker.register('/sw.js').catch(function(){});
+// instant refresh when a push arrives (the SW pings open tabs)
+navigator.serviceWorker.addEventListener('message',function(e){
+if(e.data&&e.data.type==='nbw-refresh')pollAll()})}
 if(isIOS()&&!isStandalone()){$('#ios-hint').hidden=false}
 applyCompat();
 if(pushSupported()&&Notification.permission==='granted'&&lsGet(LS_SUB,false)){
@@ -986,7 +1079,11 @@ badge:'/icon-192.png',
 data:{url:d.url||'/a'},
 timestamp:d.ts?d.ts*1000:Date.now()};
 if(d.tag)opts.tag=d.tag;
-e.waitUntil(self.registration.showNotification(title,opts))});
+e.waitUntil(Promise.all([
+self.registration.showNotification(title,opts),
+// ping open tabs so the in-app message list refreshes instantly
+self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){
+cs.forEach(function(c){c.postMessage({type:'nbw-refresh'})})})]))});
 
 self.addEventListener('notificationclick',function(e){
 e.notification.close();

@@ -145,10 +145,21 @@ Users trust that saved channels persist locally; losing that state loses their c
 - **VAPID key rotation**: the client compares `subscription.options.applicationServerKey`
   with the current key and re-subscribes on mismatch.
 - SW (`/sw.js`, `Service-Worker-Allowed: /`, no-cache): push → `showNotification` inside
-  `waitUntil`; `notificationclick` → prefer an existing `/a` client, else open, cross-origin
+  `waitUntil` AND `postMessage({type:'nbw-refresh'})` to open tabs (instant in-app refresh);
+  `notificationclick` → prefer an existing `/a` client, else open, cross-origin
   message links open in a new window (don’t destroy the app tab); `pushsubscriptionchange`
   → re-subscribe + re-POST `/api/subscribe` for the codes mirrored into a Cache entry
   (`/__nbw_state`, SWs can’t read localStorage); tiny app-shell cache network-first.
+- **Live app-page updates (works with notifications OFF — required)**: `/a` polls every
+  channel via `/api/messages` every `POLL_MS`=20s while the tab is visible (guarded by
+  `visibilitychange`; overridable in tests via `window.__NBW_POLL_MS`), plus an instant
+  refresh on the SW `nbw-refresh` message. `refreshChannel(code, silent)` only rebuilds the
+  DOM when the message set actually changed (`data-msgsig`), so no flicker / no collapsing
+  the “More” expander. A genuinely NEW arrival (not the first baseline, not the user’s own
+  send/delete which pass `silent`, not muted channels) shows an in-app **toast** (“New
+  message in <channel>: title / body”) with **Go to channel / Reply / Delete** actions, and
+  **highlights** that message (`.msg-new` + NEW badge) — at most one highlight per channel
+  (`data-newid`, the newest arrival).
 
 ## Security & operations requirements
 

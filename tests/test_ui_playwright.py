@@ -302,6 +302,45 @@ def test_app_page_more_expander_and_delete_older(server, page, channel):
     expect(page.locator(".channel .msg")).to_have_count(3)
 
 
+def test_app_page_auto_refresh_toast_and_highlight(server, browser, channel):
+    ctx = browser.new_context()
+    ctx.add_init_script("window.__NBW_POLL_MS = 500;")  # poll fast for the test
+    pg = ctx.new_page()
+    pg.on("dialog", lambda d: d.accept())
+    try:
+        pg.goto(server.base + "/a#codes=" + channel)
+        pg.wait_for_selector(".channel .msgs")
+        assert pg.locator("#toasts .toast").count() == 0  # no toast for baseline
+
+        # a message arrives from elsewhere; the page is NOT reloaded
+        server.post("/api/message", {"code": channel, "title": "Live ping", "body": "hi"})
+        # auto-refresh brings it in, highlighted (one per channel) with a NEW badge
+        pg.wait_for_selector(".channel .msg.msg-new .msg-title:has-text('Live ping')", timeout=8000)
+        assert pg.locator(".channel .msg-new").count() == 1
+        assert pg.locator(".msg-new-badge").count() == 1
+
+        # an in-app toast appears with the content and the three actions
+        pg.wait_for_selector("#toasts .toast:has-text('Live ping')", timeout=8000)
+        assert "New message" in pg.text_content("#toasts .toast")
+        for label in ("Go to channel", "Reply", "Delete"):
+            assert pg.locator(".toast-btn", has_text=label).count() >= 1
+
+        # Reply opens the channel's send dialog
+        pg.locator("#toasts .toast").first.locator(".toast-btn", has_text="Reply").click()
+        pg.wait_for_selector(".channel .send-details[open]")
+
+        # a second arrival moves the single highlight to the newest
+        server.post("/api/message", {"code": channel, "title": "Second ping"})
+        pg.wait_for_selector(".channel .msg.msg-new .msg-title:has-text('Second ping')", timeout=8000)
+        assert pg.locator(".channel .msg-new").count() == 1
+
+        # Delete on the newest toast removes that message
+        pg.locator("#toasts .toast", has_text="Second ping").locator(".toast-del").click()
+        pg.wait_for_selector(".channel .msg-title:has-text('Second ping')", state="detached", timeout=8000)
+    finally:
+        ctx.close()
+
+
 def test_unknown_code_shows_friendly_error(server, page):
     page.goto(server.base + "/a#codes=this_code_does_not_exist_123456")
     page.wait_for_selector(".channel h2:has-text('Unknown channel')")
