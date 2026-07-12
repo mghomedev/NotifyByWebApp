@@ -431,11 +431,15 @@ def test_disclaimer_on_both_pages(server):
 def test_compatibility_list_on_both_pages(server):
     for path in ("/", "/a"):
         html = server.get(path).raw.decode("utf-8")
-        assert "Which devices can receive notifications" in html
+        assert "Supported devices" in html
         assert "16.4" in html  # iOS/iPadOS minimum
         assert "16.1" in html and "Ventura" in html  # macOS Safari
         assert "Android" in html and "Chrome" in html
         assert "__COMPAT__" not in html  # placeholder substituted
+    # landing page shows the list expanded (open) so devices are visible;
+    # app page keeps it collapsed
+    assert '<details class="compat" open>' in server.get("/").raw.decode("utf-8")
+    assert '<details class="compat" open>' not in server.get("/a").raw.decode("utf-8")
 
 
 def test_app_page_has_too_old_banner_element(server):

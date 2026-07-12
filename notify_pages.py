@@ -60,7 +60,7 @@ ausgeschlossen.</p>
 # Compatibility list (shared on both pages via the __COMPAT__ placeholder).
 # Minimum versions verified 2026 — see CLAUDE.md "Web Push facts".
 COMPAT_HTML = """<details class="compat">
-<summary>Which devices can receive notifications?</summary>
+<summary>Supported devices &amp; minimum versions</summary>
 <p class="muted">Notifications use the browser's built-in Web Push. Minimum versions:</p>
 <div class="compat-scroll"><table class="compat-table">
 <tr><th>iPhone</th><td>iOS <strong>16.4</strong>+ (2023) &mdash; must be added to the Home Screen</td></tr>
@@ -1007,8 +1007,14 @@ body:JSON.stringify({code:code,subscription:body})}).catch(function(){})}))})})
 
 
 def index_html() -> str:
+    # On the landing page the compatibility list is expanded by default so the
+    # supported devices are visible without a click; the app page keeps it
+    # collapsed to stay tidy above the channel list.
+    compat_open = COMPAT_HTML.replace(
+        '<details class="compat">', '<details class="compat" open>'
+    )
     return INDEX_HTML.replace("__DISCLAIMER__", DISCLAIMER_HTML).replace(
-        "__COMPAT__", COMPAT_HTML
+        "__COMPAT__", compat_open
     )
 
 
