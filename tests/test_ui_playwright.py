@@ -48,8 +48,12 @@ def test_landing_create_channel_and_build_link(server, page):
     assert app_url.endswith("/a#codes=" + code)
     page.wait_for_selector("#qr svg")
     assert page.get_attribute("#open-app", "href") == app_url
+    # the created channel is listed VISIBLY (not hidden in an expander)
+    assert page.is_visible("#your-channels")
+    assert code in page.text_content("#code-list")
+    assert page.locator("#code-list .codes-item").first.is_visible()
 
-    # a second (typed) code extends the link (combining is under the expander)
+    # a second (typed) code extends the link (adding is under the expander)
     page.click(".combine summary")
     page.fill("#code-input", "a_second_code_0123456789")
     page.click("#add-code")
@@ -85,9 +89,13 @@ def test_landing_send_message_and_autosave(server, page):
     assert snap["messages"][0]["title"] == "Hello from landing"
 
     # returning to the page restores the channel automatically (no save click)
+    # AND lists it visibly (regression: it must not be hidden in an expander)
     page.goto(server.base + "/")
     page.wait_for_selector("#link-result:not([hidden])")
     assert code in page.text_content("#app-url")
+    assert page.is_visible("#your-channels")
+    assert page.locator("#code-list .codes-item").first.is_visible()
+    assert code in page.text_content("#code-list")
 
     # "Forget & stop saving" clears them and turns saving off
     page.click("#forget-btn")

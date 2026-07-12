@@ -268,11 +268,14 @@ send and receive its messages.</p>
 <a id="open-app" class="btn">Open app</a>
 </div>
 </div>
-<details class="combine">
-<summary>Add an existing code, or put several channels in one app</summary>
-<p class="muted">Paste channel codes to combine several channels into one installed app —
-the QR and link above update automatically.</p>
+<div id="your-channels" hidden>
+<p class="muted"><strong>Your channels</strong> &mdash; all of these are included in the app link above:</p>
 <div id="code-list"></div>
+</div>
+<details class="combine">
+<summary>Add an existing channel code</summary>
+<p class="muted">Have a code from someone else, or want several channels in one installed
+app? Paste it here &mdash; the app link and QR above update automatically.</p>
 <input id="code-input" placeholder="Paste a channel code" autocomplete="off">
 <button id="add-code">Add code</button>
 <p class="err" id="add-error"></p>
@@ -361,6 +364,7 @@ var rm=el('button','danger','Remove');
 rm.addEventListener('click',function(){
 codes=codes.filter(function(x){return x!==c});renderCodes();updateLink();saveAndPaint()});
 item.appendChild(rm);list.appendChild(item)});
+var yc=$('#your-channels');if(yc)yc.hidden=!codes.length;
 updateSendUI()}
 function updateLink(){
 var res=$('#link-result');

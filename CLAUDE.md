@@ -43,8 +43,15 @@ https://github.com/mghomedev/NotifyByWebApp
 ## Install-URL trick (core UX idea — the app URL carries the channel codes)
 
 The URL used to install the Home Screen app **contains the channel code(s)**:
-`/a#codes=CODE1,CODE2`. The landing page `/` is the generator: create channels, combine
-codes, get the app URL + QR. Implementation layers (all implemented in notify_pages.py):
+`/a#codes=CODE1,CODE2`. The landing page `/` is the generator. It is ordered
+**end-user-first** (top→down = less→more technical): (1) create your channel → shows the
+code + QR + app link together, plus a **visible** "Your channels" list (`#your-channels`
++ `#code-list`, shown whenever there are codes — must NOT be hidden in an expander) and a
+collapsible "Add an existing channel code"; (2) send a message; the auto-save card; the
+supported-devices list; then a smaller,
+clearly-labelled **"Further technical information for developers"** section (the HTTP API)
+last. Both pages also carry a shared no-warranty / free-open-source **disclaimer**
+(English + German) and the **compatibility list**. Implementation layers (in notify_pages.py):
 
 1. Codes live in the **URL fragment** — never sent to any server.
 2. `/a` injects a **data:-URI web app manifest** (client-side, absolute URLs, `start_url`
@@ -153,7 +160,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   → re-subscribe + re-POST `/api/subscribe` for the codes mirrored into a Cache entry
   (`/__nbw_state`, SWs can’t read localStorage); tiny app-shell cache network-first.
 - **Live app-page updates (works with notifications OFF — required)**: `/a` polls every
-  channel via `/api/messages` every `POLL_MS`=20s while the tab is visible (guarded by
+  channel via `/api/messages` every `POLL_MS`=12s while the tab is visible (guarded by
   `visibilitychange`; overridable in tests via `window.__NBW_POLL_MS`), plus an instant
   refresh on the SW `nbw-refresh` message. `refreshChannel(code, silent)` only rebuilds the
   DOM when the message set actually changed (`data-msgsig`), so no flicker / no collapsing
@@ -205,7 +212,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 124 tests
+## Tests (pytest; must be green before every deploy) — 176 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends
@@ -221,8 +228,12 @@ Users trust that saved channels persist locally; losing that state loses their c
   service captures the actual `pywebpush` request; a `FakeDevice` (real P-256 keys)
   DECRYPTS the aes128gcm payload and verifies the VAPID JWT signature. Proves encryption,
   VAPID, fan-out, 410-pruning, 5xx=failed, and byte-bounding of long unicode.
-- `tests/test_ui_playwright.py` — headless Chromium: landing flow, app page from fragment,
-  manifest injection, localStorage persistence/removal, UI send.
+- `tests/test_ui_playwright.py` — headless Chromium: landing create→code→QR/link flow with
+  a VISIBLE "Your channels" list, developer section, **auto-save** persistence + survival of
+  cookie- or localStorage-loss + Forget/re-enable, app page from fragment, manifest
+  injection, shareable labelled QR, message order + local timestamps, channel sorting by
+  latest activity, message delete + clear-all + "More" expander, send-password UI, and the
+  **live auto-refresh → in-app toast (Go/Reply/Delete) + one-per-channel highlight**.
 - `tests/test_ui_notifications.py` + `tests/uikit.py` — **HEADED** Chromium (headless denies
   notification permission): delivers a real push into the SW via CDP
   `ServiceWorker.deliverPushMessage` and asserts the displayed notification’s
