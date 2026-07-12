@@ -77,6 +77,17 @@ def test_push_without_url_targets_app_page(notif_page):
     assert notes[0]["data"]["url"] == "/a"
 
 
+def test_push_body_equal_to_title_not_duplicated(notif_page):
+    # A body-only message derives title==body on the server; the browser notification must
+    # show the text once (empty body), not "Hi" as both the heading and the body.
+    page, base, channel = notif_page
+    deliver_push(page, base, {"title": "Hi", "body": "Hi", "channel": "Test Channel"})
+    notes = wait_for_notification(page)
+    assert len(notes) == 1
+    assert notes[0]["title"] == "Hi — Test Channel"
+    assert notes[0]["body"] == ""
+
+
 def test_multiple_pushes_show_as_distinct_notifications(notif_page):
     page, base, channel = notif_page
     deliver_push(page, base, {"title": "First", "body": "1", "tag": "t1"})

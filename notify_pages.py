@@ -802,7 +802,9 @@ function showToast(code,chan,msg,extra){
 var wrap=$('#toasts');if(!wrap)return;
 var t=el('div','toast');
 t.appendChild(el('div','toast-title','New message in '+chan+(extra||'')));
-var content=(msg.title||'')+((msg.title&&msg.body)?' / ':'')+(msg.body||'');
+var mt=msg.title||'',mb=msg.body||'';
+if(mb&&mb===mt)mb='';  // don't repeat the title as the body
+var content=mt+((mt&&mb)?' / ':'')+mb;
 if(content)t.appendChild(el('div','toast-body',content));
 var acts=el('div','toast-acts');
 var go=el('button','toast-btn','Go to channel');
@@ -986,7 +988,9 @@ time.appendChild(el('span','msg-rel',' \\u00b7 '+t.rel));
 if(m.id===hlId)time.appendChild(el('span','msg-new-badge','NEW'));
 d.appendChild(time);
 if(m.title)d.appendChild(el('div','msg-title',m.title));
-if(m.body)d.appendChild(el('div','msg-body',m.body));
+// Never show the body when it just duplicates the title (e.g. a body-only message
+// whose title was derived from that same short body) — one line, not "Hi / Hi".
+if(m.body&&m.body!==m.title)d.appendChild(el('div','msg-body',m.body));
 if(m.url&&/^https?:\\/\\//.test(m.url)){
 var lk=el('div','msg-link');
 var a=el('a','','Open link');a.href=m.url;a.target='_blank';a.rel='noopener noreferrer';
@@ -1149,8 +1153,10 @@ var d={};
 try{d=e.data?e.data.json():{}}catch(err){d={body:e.data?e.data.text():''}}
 var title=d.title||'Notify';
 if(d.channel)title=title+' \\u2014 '+d.channel;
+var nbody=d.body||'';
+if(nbody&&nbody===(d.title||''))nbody='';  // don't repeat the title in the notification body
 var opts={
-body:d.body||'',
+body:nbody,
 icon:'/icon-192.png',
 badge:'/icon-192.png',
 data:{url:d.url||'/a'},

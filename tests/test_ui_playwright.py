@@ -461,6 +461,37 @@ def test_app_page_auto_refresh_toast_and_highlight(server, browser, channel):
         ctx.close()
 
 
+def test_app_page_body_only_message_not_shown_twice(server, page, channel):
+    # A body-only short message: the server derives title==body, so the in-app list must show
+    # the text ONCE (a title, no duplicate body line) — never "Hi / Hi".
+    server.post("/api/message", {"code": channel, "body": "Hi"})
+    page.goto(server.base + "/a#codes=" + channel)
+    page.wait_for_selector(".channel .msg-title:has-text('Hi')")
+    assert page.locator(".channel .msg-body").count() == 0
+    assert page.locator(".channel .msg-title", has_text="Hi").count() == 1
+    # a genuinely distinct body is still shown in full
+    server.post("/api/message", {"code": channel, "title": "T", "body": "a different body"})
+    page.wait_for_selector(".channel .msg-body:has-text('a different body')")
+    assert page.locator(".channel .msg-body").count() == 1
+
+
+def test_app_page_toast_does_not_duplicate_title_as_body(server, browser, channel):
+    # the in-app new-message toast must not repeat the title as its body either
+    ctx = browser.new_context()
+    ctx.add_init_script("window.__NBW_POLL_MS = 500;")
+    pg = ctx.new_page()
+    pg.on("dialog", lambda d: d.accept())
+    try:
+        pg.goto(server.base + "/a#codes=" + channel)
+        pg.wait_for_selector(".channel .msgs")
+        server.post("/api/message", {"code": channel, "body": "Hi"})  # derives title==body
+        pg.wait_for_selector("#toasts .toast:has-text('Hi')", timeout=8000)
+        txt = pg.text_content("#toasts .toast")
+        assert "Hi / Hi" not in txt  # the content is not duplicated
+    finally:
+        ctx.close()
+
+
 def test_unknown_code_shows_friendly_error(server, page):
     page.goto(server.base + "/a#codes=this_code_does_not_exist_123456")
     page.wait_for_selector(".channel h2:has-text('Unknown channel')")

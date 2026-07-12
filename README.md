@@ -72,7 +72,7 @@ curl -X POST https://YOUR-DEPLOYMENT/api/messages/clear \
 
 `/api/subscribe` and `/api/unsubscribe` (push subscription per device) are normally handled
 by the app itself. Limits: title ≤ 120 chars, body ≤ 2000, optional http(s) url ≤ 500,
-send-password 4–120 chars, rate limit 120 requests/min/IP, ≤ 200 subscribed devices per
+send-password 4–128 chars, rate limit 120 requests/min/IP, ≤ 200 subscribed devices per
 channel, newest 50 messages kept, channels expire after 400 days of inactivity.
 
 ## Supported devices (minimum versions)
@@ -126,7 +126,7 @@ only in local `.env` files (gitignored) and Vercel environment variables.
 python -m venv .venv && . .venv/Scripts/activate   # .venv/bin/activate on Linux/macOS
 pip install -r requirements-dev.txt
 python -m playwright install chromium              # once, for the browser UI tests
-python -m pytest                                   # 176 tests, fully offline
+python -m pytest                                   # 186 tests, fully offline
 ```
 
 Tests include real-crypto Web Push (a fake device decrypts the actual payload) and browser

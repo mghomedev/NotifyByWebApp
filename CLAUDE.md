@@ -26,6 +26,11 @@ https://github.com/mghomedev/NotifyByWebApp
   (≤500). At least one of title/body is required; a missing title is derived from the
   body's first line (first `TITLE_SNIPPET`=60 chars + "…"). Stored per channel (newest
   first, capped at `NBW_MAX_MESSAGES`=50) and pushed to all subscribers.
+  The full title+body is always stored, but **every display surface de-duplicates**: the
+  in-app message list, the new-message toast, and the browser push notification render the
+  body only when it differs from the title — so a body-only short message (whose derived
+  title equals the body) shows once, never "Hi / Hi". (Dedup is at the display layer, in JS;
+  the server derivation is unchanged.)
 - **Send-password (optional)**: a channel may set a send-password at creation; only its
   `sha256` hash is stored in the channel meta (`send_pw`) — never the raw phrase. When set,
   publishing requires the matching password (constant-time compare → `SendForbidden`/403
@@ -117,7 +122,8 @@ Users trust that saved channels persist locally; losing that state loses their c
 - `api/index.py` — single Vercel entrypoint (`BaseHTTPRequestHandler` named `handler`;
   `pyproject.toml` `[tool.vercel] entrypoint = "api.index:handler"`).
   GET: `/` `/a` `/sw.js` `/vendor/qrcode.js` `/icon.svg` `/icon-192.png` `/icon-512.png`
-  `/apple-touch-icon.png` `/favicon.ico` `/robots.txt` `/google<token>.html` (Search
+  `/apple-touch-icon.png` (+ `-precomposed` alias) `/favicon.ico` `/robots.txt`
+  `/google<token>.html` (Search
   Console verification) `/api/health` `/api/status`.
   POST (JSON, code in body): `/api/channel` `/api/subscribe` `/api/unsubscribe`
   `/api/message` `/api/message/delete` (by `id`) `/api/messages` `/api/messages/clear`.
@@ -235,7 +241,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 183 tests
+## Tests (pytest; must be green before every deploy) — 186 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends
@@ -259,12 +265,14 @@ Users trust that saved channels persist locally; losing that state loses their c
   **live auto-refresh → in-app toast (Go/Reply/Delete) + one-per-channel highlight**, and the
   **`/` → `/a` returning-visitor redirect** (with `/?create` escape hatch + `nbw_nosave`
   suppression), the **shared-store union** (a channel in only the legacy list OR only the
-  cross-page store still renders on `/a`), and the **shared tombstone** (a channel removed on
-  the generator is not resurrected on `/a` by a stale fragment).
+  cross-page store still renders on `/a`), the **shared tombstone** (a channel removed on
+  the generator is not resurrected on `/a` by a stale fragment), and the **title/body
+  display de-dup** (a body-only message renders once in the list + toast, never "Hi / Hi").
 - `tests/test_ui_notifications.py` + `tests/uikit.py` — **HEADED** Chromium (headless denies
   notification permission): delivers a real push into the SW via CDP
   `ServiceWorker.deliverPushMessage` and asserts the displayed notification’s
-  title/body/tag/click-url; incl. a Pixel device-emulation run (Android = Chrome).
+  title/body/tag/click-url (incl. the title==body de-dup → empty notification body);
+  incl. a Pixel device-emulation run (Android = Chrome).
 - `tests/test_ui_platforms.py` — iOS Safari-tab emulation (Push APIs stripped → install
   banner, enable hidden), iOS installed-standalone emulation (fake push stack → subscribe
   registers on the server, UI ON), and the false-ON regression guard (server 404 → error
