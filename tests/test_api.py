@@ -471,6 +471,13 @@ def test_static_assets(server):
     assert "Disallow: /api/" in robots and "Disallow: /a" in robots
 
 
+def test_google_site_verification(server):
+    resp = server.get("/google775b279a195202b2.html")
+    assert resp.status == 200
+    body = resp.raw.decode("utf-8")
+    assert body.strip() == "google-site-verification: google775b279a195202b2.html"
+
+
 def test_health(server):
     resp = server.get("/api/health")
     assert resp.status == 200 and resp.json == {"ok": True}

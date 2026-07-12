@@ -202,6 +202,13 @@ class handler(BaseHTTPRequestHandler):
                 self._send(200, icons.ICON_192, "image/png", cache=CACHE_ASSET)
             elif path == "/robots.txt":
                 self._send(200, pages.ROBOTS_TXT, "text/plain; charset=utf-8")
+            elif path == "/" + pages.GOOGLE_VERIFY_FILE:
+                self._send(
+                    200,
+                    pages.GOOGLE_VERIFY_BODY,
+                    "text/html; charset=utf-8",
+                    cache=CACHE_ASSET,
+                )
             elif path == "/api/health":
                 self._json(200, {"ok": True})
             elif path == "/api/status":

@@ -95,7 +95,8 @@ Users trust that saved channels persist locally; losing that state loses their c
 - `api/index.py` — single Vercel entrypoint (`BaseHTTPRequestHandler` named `handler`;
   `pyproject.toml` `[tool.vercel] entrypoint = "api.index:handler"`).
   GET: `/` `/a` `/sw.js` `/vendor/qrcode.js` `/icon.svg` `/icon-192.png` `/icon-512.png`
-  `/apple-touch-icon.png` `/favicon.ico` `/robots.txt` `/api/health` `/api/status`.
+  `/apple-touch-icon.png` `/favicon.ico` `/robots.txt` `/google<token>.html` (Search
+  Console verification) `/api/health` `/api/status`.
   POST (JSON, code in body): `/api/channel` `/api/subscribe` `/api/unsubscribe`
   `/api/message` `/api/message/delete` (by `id`) `/api/messages` `/api/messages/clear`.
   OPTIONS: CORS preflight for `/api/*`.

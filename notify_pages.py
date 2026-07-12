@@ -26,6 +26,11 @@ CSP = (
 
 ROBOTS_TXT = "User-agent: *\nDisallow: /a\nDisallow: /api/\n"
 
+# Google Search Console HTML-file verification (public token, safe to commit).
+# Served verbatim at /<GOOGLE_VERIFY_FILE> so Search Console can verify the domain.
+GOOGLE_VERIFY_FILE = "google775b279a195202b2.html"
+GOOGLE_VERIFY_BODY = "google-site-verification: google775b279a195202b2.html\n"
+
 # Shown at the bottom of both the landing page and the app page. Injected via
 # the __DISCLAIMER__ placeholder so the two pages never drift apart.
 DISCLAIMER_HTML = """<div class="disclaimer">
