@@ -49,7 +49,8 @@ def test_landing_create_channel_and_build_link(server, page):
     page.wait_for_selector("#qr svg")
     assert page.get_attribute("#open-app", "href") == app_url
 
-    # a second (typed) code extends the link
+    # a second (typed) code extends the link (combining is under the expander)
+    page.click(".combine summary")
     page.fill("#code-input", "a_second_code_0123456789")
     page.click("#add-code")
     app_url2 = page.text_content("#app-url").strip()
@@ -88,15 +89,16 @@ def test_landing_send_message_and_cookie_save(server, page):
     page.click("#save-btn")
     assert "saved" in page.text_content("#save-status").lower()
 
-    # returning to the page restores the channel from the cookie
+    # returning to the page restores the channel (visible via the app link + QR)
     page.goto(server.base + "/")
-    page.wait_for_selector("#code-list .codes-item span")
-    assert code in page.text_content("#code-list")
+    page.wait_for_selector("#link-result:not([hidden])")
+    assert code in page.text_content("#app-url")
     assert page.is_checked("#save-consent")
 
-    # "forget" clears the cookie
+    # "forget" clears the saved channels
     page.click("#forget-btn")
     page.goto(server.base + "/")
+    assert page.is_hidden("#link-result")
     assert page.query_selector("#code-list .codes-item") is None
 
 
@@ -115,8 +117,8 @@ def test_landing_saved_channels_persist_to_both_stores_and_survive_cookie_loss(s
     # survives losing the cookie (e.g. Safari's ~7-day cap on JS cookies)
     page.context.clear_cookies()
     page.reload()
-    page.wait_for_selector("#code-list .codes-item span")
-    assert code in page.text_content("#code-list")
+    page.wait_for_selector("#link-result:not([hidden])")
+    assert code in page.text_content("#app-url")
     # the heal step rewrote the dropped cookie
     assert any(c["name"] == "nbw_codes" for c in page.context.cookies())
 
@@ -132,8 +134,8 @@ def test_landing_saved_channels_survive_localstorage_loss(server, page):
     # drop only localStorage; the cookie should restore the channels
     page.evaluate("localStorage.removeItem('nbw_saved_codes')")
     page.reload()
-    page.wait_for_selector("#code-list .codes-item span")
-    assert code in page.text_content("#code-list")
+    page.wait_for_selector("#link-result:not([hidden])")
+    assert code in page.text_content("#app-url")
     assert code in (page.evaluate("localStorage.getItem('nbw_saved_codes')") or "")
 
 

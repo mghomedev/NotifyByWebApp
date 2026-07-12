@@ -355,7 +355,8 @@ def test_landing_page(server):
     resp = server.get("/")
     assert resp.status == 200
     html = resp.raw.decode("utf-8")
-    assert "Create a channel" in html
+    assert "Create your channel" in html
+    assert "Further technical information for developers" in html  # API moved here
     assert "/vendor/qrcode.js" in html
     assert resp.headers.get("Content-Security-Policy")
     assert resp.headers.get("X-Content-Type-Options") == "nosniff"

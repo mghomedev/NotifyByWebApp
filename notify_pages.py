@@ -178,6 +178,13 @@ font-size:.72rem;line-height:1.55;color:var(--muted)}
 .compat-table th,.compat-table td{padding:7px 12px 7px 0;border-top:1px solid var(--border)}
 .compat-table tr:first-child th,.compat-table tr:first-child td{border-top:0}
 .warn-banner{background:#b45309}
+.combine{margin-top:12px}
+.dev{margin-top:28px}
+.dev-heading{font-size:.9rem;font-weight:600;color:var(--muted);text-align:center;
+text-transform:uppercase;letter-spacing:.04em;border-top:1px solid var(--border);
+padding-top:18px;margin-bottom:8px}
+.dev-card{font-size:.85rem}
+.dev-card h3{font-size:.95rem;margin:0 0 6px}
 """
 
 _HEAD_COMMON = (
@@ -213,7 +220,7 @@ A <strong>channel</strong> is identified by a secret code: anyone with the code 
 send and receive its messages.</p>
 
 <div class="card">
-<h2>1. Create a channel</h2>
+<h2>1. Create your channel</h2>
 <p class="muted">You get a secret channel code. Save it — it cannot be recovered.</p>
 <input id="channel-name" maxlength="80" placeholder="Channel name (optional)" autocomplete="off">
 <input id="channel-password" maxlength="128" placeholder="Send password (optional; only holders can send)" autocomplete="off">
@@ -223,35 +230,32 @@ send and receive its messages.</p>
 <p>Your new channel code:</p>
 <div class="code-pill" id="new-code"></div>
 <button class="ghost" data-copy="#new-code">Copy code</button>
-<p class="muted">It was added to your app link below.</p>
 <p class="muted" id="create-protected" hidden>&#128274; Sending to this channel requires the send password you set. Anyone with the code can still receive.</p>
 </div>
-</div>
-
-<div class="card">
-<h2>2. Build your app link</h2>
-<p class="muted">Add one or more channel codes. You get a link that opens the
-notification app already set up for those channels.
-On your phone: open the link (or scan the QR code), then use
-<strong>Add to Home Screen</strong> to install it.</p>
-<div id="code-list"></div>
-<input id="code-input" placeholder="Paste a channel code" autocomplete="off">
-<button id="add-code">Add code</button>
-<p class="err" id="add-error"></p>
 <div id="link-result" hidden>
+<p class="muted"><strong>Install it or share it</strong> — scan this QR with a phone camera
+(or open the link), then choose <strong>Add to Home Screen</strong>:</p>
+<div class="share-label"><div class="share-app">Join NotifyByWebApp</div></div>
+<div id="qr"></div>
 <div class="code-pill" id="app-url"></div>
 <div class="row">
 <button class="ghost" data-copy="#app-url">Copy link</button>
 <a id="open-app" class="btn">Open app</a>
 </div>
-<div class="share-label"><div class="share-app">Join NotifyByWebApp</div></div>
-<div id="qr"></div>
-<p class="muted">Scan with your phone camera &rarr; opens the app &rarr; Add to Home Screen.</p>
 </div>
+<details class="combine">
+<summary>Add an existing code, or put several channels in one app</summary>
+<p class="muted">Paste channel codes to combine several channels into one installed app —
+the QR and link above update automatically.</p>
+<div id="code-list"></div>
+<input id="code-input" placeholder="Paste a channel code" autocomplete="off">
+<button id="add-code">Add code</button>
+<p class="err" id="add-error"></p>
+</details>
 </div>
 
 <div class="card">
-<h2>3. Send a message</h2>
+<h2>2. Send a message</h2>
 <p class="muted">Send to a channel's subscribers right now &mdash; anyone who has the
 channel code can send.</p>
 <label for="send-code">Channel code</label>
@@ -267,7 +271,26 @@ channel code can send.</p>
 </div>
 
 <div class="card">
-<h2>4. Send from your own code</h2>
+<h2>Remember my channels on this device</h2>
+<label class="checkline"><input type="checkbox" id="save-consent">
+Save my channel codes so they reappear when I come back</label>
+<p class="muted warn">&#9888; If you tick this and press <strong>Save</strong>, your channel
+codes are stored on this device (in this browser's cookie and local storage) and reappear
+on future visits. Channel codes are secrets (anyone with a code can send and read) &mdash;
+only do this on a device you trust.</p>
+<div class="row">
+<button id="save-btn">Save channels</button>
+<button class="ghost" id="forget-btn">Forget saved channels</button>
+</div>
+<p class="muted" id="save-status"></p>
+</div>
+
+<div class="card">__COMPAT__</div>
+
+<section class="dev">
+<h2 class="dev-heading">Further technical information for developers</h2>
+<div class="card dev-card">
+<h3>Send from your own code (HTTP API)</h3>
 <p class="muted">Any script or service that can POST JSON can send to a channel &mdash;
 the channel code is the only credential, no SDK or login needed.</p>
 <pre>curl -X POST <span id="curl-host"></span>/api/message \\
@@ -285,24 +308,7 @@ the body, never the URL.</p>
 </ul>
 </details>
 </div>
-
-<div class="card">
-<h2>Remember my channels on this device</h2>
-<label class="checkline"><input type="checkbox" id="save-consent">
-Save my channel codes so they reappear when I come back</label>
-<p class="muted warn">&#9888; If you tick this and press <strong>Save</strong>, a
-<strong>cookie</strong> is stored in this browser holding your channel codes, and it
-is sent to this site on future visits so your channels reappear. Channel codes are
-secrets (anyone with a code can send and read) &mdash; only do this on a device you
-trust.</p>
-<div class="row">
-<button id="save-btn">Save channels</button>
-<button class="ghost" id="forget-btn">Forget saved channels</button>
-</div>
-<p class="muted" id="save-status"></p>
-</div>
-
-<div class="card">__COMPAT__</div>
+</section>
 
 <footer class="muted">Free &amp; open-source hobby project &middot;
 <a href="https://github.com/mghomedev/NotifyByWebApp" rel="noopener">Source on GitHub</a></footer>
