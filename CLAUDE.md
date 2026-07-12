@@ -65,12 +65,14 @@ codes, get the app URL + QR. Implementation layers (all implemented in notify_pa
 Users trust that saved channels persist locally; losing that state loses their channels
 (the only recovery is the channel code / app-link QR). Requirements:
 
-- The landing-page **"Remember my channels"** feature persists to **BOTH** a cookie
-  (`nbw_codes`) **and** localStorage (`nbw_saved_codes`, a key distinct from the app page's
-  `nbw_codes` so it never clobbers the installed app's channel list). It **reads/merges from
-  both** on load and **re-writes both on every visit** — this self-heals (if one store was
-  dropped the other restores it) and refreshes the cookie's expiry window. When the consent
-  box is ticked, channel add/remove auto-persists to both.
+- The landing-page saved-channels feature is **AUTO-SAVE by default** (no opt-in — opt-in
+  was too easy to miss, so users lost channels). Any create/add/remove persists to **BOTH**
+  a cookie (`nbw_codes`) **and** localStorage (`nbw_saved_codes`, a key distinct from the app
+  page's `nbw_codes` so it never clobbers the installed app's list). It **reads/merges from
+  both** on load and **re-writes both on every visit** — self-heals (a dropped store is
+  restored) and refreshes the cookie window. A clear status ("✅ N channels saved on this
+  device") plus a create-time confirmation shows it. Users opt OUT via **Forget & stop
+  saving** (clears both + sets `nbw_nosave`); a **Save my channels here** button re-enables.
 - **Never** rename, clear, or change the FORMAT of these keys without a migration that
   preserves existing data; never clear them implicitly; keep this code stable across
   releases. Treat it as load-bearing user data.

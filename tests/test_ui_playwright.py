@@ -62,7 +62,7 @@ def test_landing_create_channel_and_build_link(server, page):
     assert "does not look like" in page.text_content("#add-error")
 
 
-def test_landing_send_message_and_cookie_save(server, page):
+def test_landing_send_message_and_autosave(server, page):
     page.goto(server.base + "/")
     page.fill("#channel-name", "Send UI")
     page.click("#create-btn")
@@ -72,45 +72,48 @@ def test_landing_send_message_and_cookie_save(server, page):
     # the send form and the developer curl example are prefilled with the code
     assert page.input_value("#send-code") == code
     assert page.text_content("#curl-code") == code
+    # the channel is saved automatically (no opt-in) — confirmation shown
+    assert page.is_visible("#create-saved")
+    assert "saved" in page.text_content("#save-status").lower()
 
     # send a message straight from the landing page
     page.fill("#send-title", "Hello from landing")
     page.click("#send-btn")
     page.wait_for_selector("#send-ok:not([hidden])")
     assert "no device" in page.text_content("#send-ok").lower()  # sent=0, none yet
-    # it really reached the channel
     snap = server.post("/api/messages", {"code": code}).json
     assert snap["messages"][0]["title"] == "Hello from landing"
 
-    # cookie save is opt-in: the button does nothing until consent is ticked
-    page.click("#save-btn")
-    assert "tick the box" in page.text_content("#save-status").lower()
-    page.check("#save-consent")
-    page.click("#save-btn")
-    assert "saved" in page.text_content("#save-status").lower()
-
-    # returning to the page restores the channel (visible via the app link + QR)
+    # returning to the page restores the channel automatically (no save click)
     page.goto(server.base + "/")
     page.wait_for_selector("#link-result:not([hidden])")
     assert code in page.text_content("#app-url")
-    assert page.is_checked("#save-consent")
 
-    # "forget" clears the saved channels
+    # "Forget & stop saving" clears them and turns saving off
     page.click("#forget-btn")
     page.goto(server.base + "/")
     assert page.is_hidden("#link-result")
-    assert page.query_selector("#code-list .codes-item") is None
+    assert "off" in page.text_content("#save-status").lower()
+    assert page.is_visible("#save-btn")  # re-enable button offered
+
+    # re-enabling saving works again
+    page.click("#save-btn")
+    page.fill("#channel-name", "Again")
+    page.click("#create-btn")
+    page.wait_for_selector("#create-result:not([hidden])")
+    code2 = page.text_content("#new-code").strip()
+    page.goto(server.base + "/")
+    page.wait_for_selector("#link-result:not([hidden])")
+    assert code2 in page.text_content("#app-url")
 
 
-def test_landing_saved_channels_persist_to_both_stores_and_survive_cookie_loss(server, page):
+def test_landing_autosaved_channels_survive_cookie_loss(server, page):
     page.goto(server.base + "/")
     page.fill("#channel-name", "Durable")
     page.click("#create-btn")
     page.wait_for_selector("#create-result:not([hidden])")
     code = page.text_content("#new-code").strip()
-    page.check("#save-consent")
-    page.click("#save-btn")
-    # written to BOTH a cookie and localStorage
+    # auto-saved to BOTH a cookie and localStorage (no opt-in)
     assert any(c["name"] == "nbw_codes" for c in page.context.cookies())
     assert code in (page.evaluate("localStorage.getItem('nbw_saved_codes')") or "")
 
@@ -119,19 +122,16 @@ def test_landing_saved_channels_persist_to_both_stores_and_survive_cookie_loss(s
     page.reload()
     page.wait_for_selector("#link-result:not([hidden])")
     assert code in page.text_content("#app-url")
-    # the heal step rewrote the dropped cookie
-    assert any(c["name"] == "nbw_codes" for c in page.context.cookies())
+    assert any(c["name"] == "nbw_codes" for c in page.context.cookies())  # cookie healed
 
 
-def test_landing_saved_channels_survive_localstorage_loss(server, page):
+def test_landing_autosaved_channels_survive_localstorage_loss(server, page):
     page.goto(server.base + "/")
     page.fill("#channel-name", "Durable2")
     page.click("#create-btn")
     page.wait_for_selector("#create-result:not([hidden])")
     code = page.text_content("#new-code").strip()
-    page.check("#save-consent")
-    page.click("#save-btn")
-    # drop only localStorage; the cookie should restore the channels
+    # drop only localStorage; the cookie restores it, and the heal rewrites localStorage
     page.evaluate("localStorage.removeItem('nbw_saved_codes')")
     page.reload()
     page.wait_for_selector("#link-result:not([hidden])")

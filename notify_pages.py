@@ -199,6 +199,9 @@ font-size:.72rem;line-height:1.55;color:var(--muted)}
 .compat-table th,.compat-table td{padding:7px 12px 7px 0;border-top:1px solid var(--border)}
 .compat-table tr:first-child th,.compat-table tr:first-child td{border-top:0}
 .warn-banner{background:#b45309}
+.save-status{font-size:.9rem;margin:2px 0}
+.save-status.ok{color:var(--ok);font-weight:600}
+.save-status.off{color:var(--danger);font-weight:600}
 .combine{margin-top:12px}
 .dev{margin-top:28px}
 .dev-heading{font-size:.9rem;font-weight:600;color:var(--muted);text-align:center;
@@ -251,6 +254,7 @@ send and receive its messages.</p>
 <p>Your new channel code:</p>
 <div class="code-pill" id="new-code"></div>
 <button class="ghost" data-copy="#new-code">Copy code</button>
+<p class="save-status ok" id="create-saved" hidden>&#9989; Saved on this device &mdash; it will reappear when you return.</p>
 <p class="muted" id="create-protected" hidden>&#128274; Sending to this channel requires the send password you set. Anyone with the code can still receive.</p>
 </div>
 <div id="link-result" hidden>
@@ -292,18 +296,16 @@ channel code can send.</p>
 </div>
 
 <div class="card">
-<h2>Remember my channels on this device</h2>
-<label class="checkline"><input type="checkbox" id="save-consent">
-Save my channel codes so they reappear when I come back</label>
-<p class="muted warn">&#9888; If you tick this and press <strong>Save</strong>, your channel
-codes are stored on this device (in this browser's cookie and local storage) and reappear
-on future visits. Channel codes are secrets (anyone with a code can send and read) &mdash;
-only do this on a device you trust.</p>
+<h2>Your channels are saved automatically</h2>
+<p id="save-status" class="save-status"></p>
 <div class="row">
-<button id="save-btn">Save channels</button>
-<button class="ghost" id="forget-btn">Forget saved channels</button>
+<button class="ghost" id="forget-btn">Forget &amp; stop saving</button>
+<button id="save-btn" hidden>Save my channels here</button>
 </div>
-<p class="muted" id="save-status"></p>
+<p class="muted warn">&#9888; Your channel codes are stored in this browser (local storage +
+a cookie) so you don't lose them; they are never sent anywhere for safekeeping. Codes are
+secrets &mdash; anyone with a code can send and read &mdash; so use a device you trust, and
+press <strong>Forget</strong> on a shared computer.</p>
 </div>
 
 <div class="card">__COMPAT__</div>
@@ -357,7 +359,7 @@ var item=el('div','codes-item');
 item.appendChild(el('span','',c));
 var rm=el('button','danger','Remove');
 rm.addEventListener('click',function(){
-codes=codes.filter(function(x){return x!==c});renderCodes();updateLink();persistIfConsented()});
+codes=codes.filter(function(x){return x!==c});renderCodes();updateLink();saveAndPaint()});
 item.appendChild(rm);list.appendChild(item)});
 updateSendUI()}
 function updateLink(){
@@ -376,7 +378,7 @@ $('#add-error').textContent='That does not look like a channel code (16-64 lette
 return false}
 $('#add-error').textContent='';
 if(codes.indexOf(c)<0)codes.push(c);
-renderCodes();updateLink();persistIfConsented();return true}
+renderCodes();updateLink();saveAndPaint();return true}
 $('#add-code').addEventListener('click',function(){
 if(addCode($('#code-input').value))$('#code-input').value=''});
 $('#code-input').addEventListener('keydown',function(e){
@@ -388,6 +390,7 @@ api('/api/channel',{name:$('#channel-name').value,send_password:$('#channel-pass
 $('#new-code').textContent=j.code;
 $('#create-result').hidden=false;
 $('#create-protected').hidden=!j.send_protected;
+$('#create-saved').hidden=!autoSaveOn();
 addCode(j.code);$('#send-code').value=j.code;
 $('#send-password').value=$('#channel-password').value;updateCurlCode()}).catch(function(e){
 $('#create-error').textContent='Could not create channel: '+e.message}).then(function(){
@@ -429,11 +432,11 @@ ok.textContent=m;ok.hidden=false})
 if(e&&e.status===403)err.textContent='This channel requires a valid send password.';
 else err.textContent='Could not send: '+(e.message||'error')})
 .then(function(){btn.disabled=false})});
-// ---- optional: remember channels on this device (opt-in). Persisted to BOTH a
-// cookie AND localStorage for durability (browsers cap JS cookies — Safari ~7 days),
-// merged + self-healed on every load. Never cleared implicitly; only via Remove /
-// Forget / the user clearing site data. See CLAUDE.md persistence requirement.
-var LS_SAVED='nbw_saved_codes';
+// ---- remember channels on this device. Saved AUTOMATICALLY by default (to BOTH
+// localStorage and a cookie for durability — browsers cap JS cookies, Safari ~7 days),
+// merged + self-healed on every load so channels are never accidentally lost. Users can
+// turn it off + clear with "Forget & stop saving". See CLAUDE.md persistence requirement.
+var LS_SAVED='nbw_saved_codes',LS_NOSAVE='nbw_nosave';
 function setCookie(n,v,days){
 var d=new Date();d.setTime(d.getTime()+days*864e5);
 var sec=location.protocol==='https:'?';Secure':'';
@@ -446,30 +449,34 @@ document.cookie=n+'=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;SameSite=Lax'}
 function lsSaveArr(k,a){try{localStorage.setItem(k,JSON.stringify(a))}catch(e){}}
 function lsLoadArr(k){try{var v=JSON.parse(localStorage.getItem(k));
 return Array.isArray(v)?v:[]}catch(e){return[]}}
-function persistSaved(){setCookie('nbw_codes',codes.join(','),365);lsSaveArr(LS_SAVED,codes)}
-function persistIfConsented(){var c=$('#save-consent');if(c&&c.checked)persistSaved()}
+function autoSaveOn(){try{return localStorage.getItem(LS_NOSAVE)!=='1'}catch(e){return true}}
+function persistSaved(){if(!autoSaveOn())return;
+setCookie('nbw_codes',codes.join(','),365);lsSaveArr(LS_SAVED,codes)}
+function clearSaved(){delCookie('nbw_codes');try{localStorage.removeItem(LS_SAVED)}catch(e){}}
+function paintSaveStatus(){
+var st=$('#save-status');if(!st)return;
+if(!autoSaveOn()){
+st.textContent='Saving is OFF on this device \\u2014 your channels will NOT be remembered when you leave.';
+st.className='save-status off';$('#save-btn').hidden=false;$('#forget-btn').hidden=true}
+else{
+st.textContent=codes.length
+?('\\u2705 '+codes.length+' channel'+(codes.length>1?'s':'')+' saved on this device \\u2014 they reappear when you return.')
+:'Channels you create or add are saved automatically on this device, so you will not lose them.';
+st.className='save-status ok';$('#save-btn').hidden=true;$('#forget-btn').hidden=false}}
+function saveAndPaint(){persistSaved();paintSaveStatus()}
 $('#save-btn').addEventListener('click',function(){
-var st=$('#save-status');
-if(!$('#save-consent').checked){
-st.textContent='Tick the box first \\u2014 that is your consent to store on this device.';return}
-if(!codes.length){st.textContent='Create or add at least one channel first.';return}
-persistSaved();
-st.textContent='Saved '+codes.length+' channel(s) on this device (cookie + local storage).'});
+try{localStorage.removeItem(LS_NOSAVE)}catch(e){}persistSaved();paintSaveStatus()});
 $('#forget-btn').addEventListener('click',function(){
-delCookie('nbw_codes');try{localStorage.removeItem(LS_SAVED)}catch(e){}
-$('#save-consent').checked=false;
-$('#save-status').textContent='Saved channels cleared from this device.'});
+clearSaved();try{localStorage.setItem(LS_NOSAVE,'1')}catch(e){}paintSaveStatus()});
 (function loadSaved(){
 var merged=[];
 (getCookie('nbw_codes')||'').split(',').concat(lsLoadArr(LS_SAVED)).forEach(function(c){
 c=(c||'').trim();if(CODE_RE.test(c)&&merged.indexOf(c)<0)merged.push(c)});
-if(!merged.length)return;
 var added=false;
 merged.forEach(function(c){if(codes.indexOf(c)<0){codes.push(c);added=true}});
-persistSaved();  // heal: rewrite BOTH stores (restore a dropped one, refresh cookie window)
 if(added){renderCodes();updateLink()}
-$('#save-consent').checked=true;
-$('#save-status').textContent='Loaded '+codes.length+' saved channel(s) from this device.'})();
+persistSaved();  // heal: rewrite BOTH stores (restore a dropped one, refresh cookie window)
+paintSaveStatus()})();
 $('#curl-host').textContent=location.origin;
 updateSendUI();
 })();
@@ -998,7 +1005,7 @@ window.addEventListener('online',drainPendingUnsub);
 // ------- auto-refresh: poll all displayed channels while the tab is visible,
 // so new messages appear (and toast) even when OS notifications are off
 var POLL_MS=(typeof window.__NBW_POLL_MS==='number'&&window.__NBW_POLL_MS>=300)
-?window.__NBW_POLL_MS:20000;
+?window.__NBW_POLL_MS:12000;
 function pollAll(){codes.forEach(function(c){refreshChannel(c)})}
 function startPolling(){setInterval(function(){
 if(document.visibilityState==='visible')pollAll()},POLL_MS)}
