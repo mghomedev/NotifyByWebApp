@@ -492,6 +492,15 @@ def test_app_page_toast_does_not_duplicate_title_as_body(server, browser, channe
         ctx.close()
 
 
+def test_app_page_header_shows_web_app_subtitle(server, page, channel):
+    # the app page (like the landing page) must show the "by Web App" selling-point
+    # subtitle under the "Notify" wordmark, not just "Notify"
+    page.goto(server.base + "/a#codes=" + channel)
+    page.wait_for_selector("header .brand h1:has-text('Notify')")
+    sub = page.text_content("header .brandsub").replace(" ", " ").strip()
+    assert sub == "by Web App"
+
+
 def test_unknown_code_shows_friendly_error(server, page):
     page.goto(server.base + "/a#codes=this_code_does_not_exist_123456")
     page.wait_for_selector(".channel h2:has-text('Unknown channel')")

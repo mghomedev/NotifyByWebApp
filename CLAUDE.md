@@ -130,6 +130,7 @@ Users trust that saved channels persist locally; losing that state loses their c
 - `api/index.py` — single Vercel entrypoint (`BaseHTTPRequestHandler` named `handler`;
   `pyproject.toml` `[tool.vercel] entrypoint = "api.index:handler"`).
   GET: `/` `/a` `/sw.js` `/vendor/qrcode.js` `/icon.svg` `/icon-192.png` `/icon-512.png`
+  `/badge.png` (monochrome Android notification icon)
   `/apple-touch-icon.png` (+ `-precomposed` alias) `/favicon.ico` `/robots.txt`
   `/google<token>.html` (Search
   Console verification) `/api/health` `/api/status`.
@@ -141,6 +142,15 @@ Users trust that saved channels persist locally; losing that state loses their c
 - `notify_icons.py` / `notify_vendor.py` — base64-embedded PNGs / vendored
   qrcode-generator 1.4.4 (MIT, served from `/vendor/qrcode.js`; no CDN → CSP stays
   `script-src 'self' 'unsafe-inline'`).
+- **App mark / icons**: a white **bell** with an amber **wireless/broadcast signal**
+  (top-right = "sent over the web / Web Push") on the indigo brand gradient — distinctive,
+  not a generic bell. Geometry is defined once and kept in sync between `ICON_SVG`
+  (notify_pages.py — `/icon.svg` + both page headers) and `scripts/make_icons.ps1` (the
+  PNG generator). The generator emits the OPAQUE full-bleed squares (`icon-192/512`,
+  `apple-touch-icon` — no transparency, required by iOS/maskable) **and** `badge.png`, a
+  MONOCHROME TRANSPARENT silhouette used as the Android notification small icon (see the SW
+  note). Headers read **"Notify"** + a small uppercase **"by Web App"** subtitle
+  (`.brand`/`.brandsub`) on both pages.
 - `scripts/` — VAPID key generation, icon regeneration (`make_icons.ps1` + `embed_icons.py`).
 
 ## Storage (decided: Upstash Redis via REST; in-memory fallback)
@@ -191,7 +201,11 @@ Users trust that saved channels persist locally; losing that state loses their c
 - **VAPID key rotation**: the client compares `subscription.options.applicationServerKey`
   with the current key and re-subscribes on mismatch.
 - SW (`/sw.js`, `Service-Worker-Allowed: /`, no-cache): push → `showNotification` inside
-  `waitUntil` AND `postMessage({type:'nbw-refresh'})` to open tabs (instant in-app refresh);
+  `waitUntil` (full-colour `icon:'/icon-192.png'`; `badge:'/badge.png'` — the monochrome
+  transparent small icon, because Android masks the badge to its alpha channel so an opaque
+  icon renders as a plain **white square** in the status bar; the shown body is blanked when
+  it equals the title, per the display de-dup) AND `postMessage({type:'nbw-refresh'})` to
+  open tabs (instant in-app refresh);
   `notificationclick` → prefer an existing `/a` client, else open, cross-origin
   message links open in a new window (don’t destroy the app tab); `pushsubscriptionchange`
   → re-subscribe + re-POST `/api/subscribe` for the codes mirrored into a Cache entry
@@ -249,7 +263,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 186 tests
+## Tests (pytest; must be green before every deploy) — 187 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends
@@ -257,7 +271,8 @@ Users trust that saved channels persist locally; losing that state loses their c
 - `tests/test_api.py` — integration: the real handler on a local port, in-memory storage,
   monkeypatched `webpush` capture; happy path + error/cap/prune/rate-limit + channel-create
   soft cap + oversized-body drain + CSP directive + StorageError→502 + security headers +
-  the no-logging guarantee.
+  the no-logging guarantee + static assets (incl. `/badge.png` served with an alpha channel
+  so the Android notification icon is not a white square, and the `/icon.svg` amber accent).
 - `tests/test_storage_http.py` — the real `RedisStorage` HTTP layer against a fake Upstash
   REST server (request shape, Bearer auth, `/pipeline`, per-command error, non-JSON, refused
   connection → `StorageError`).
@@ -279,7 +294,8 @@ Users trust that saved channels persist locally; losing that state loses their c
 - `tests/test_ui_notifications.py` + `tests/uikit.py` — **HEADED** Chromium (headless denies
   notification permission): delivers a real push into the SW via CDP
   `ServiceWorker.deliverPushMessage` and asserts the displayed notification’s
-  title/body/tag/click-url (incl. the title==body de-dup → empty notification body);
+  title/body/tag/click-url/**badge** (incl. the title==body de-dup → empty notification body,
+  and `badge` = `/badge.png` so the Android status-bar icon isn’t a white square);
   incl. a Pixel device-emulation run (Android = Chrome).
 - `tests/test_ui_platforms.py` — iOS Safari-tab emulation (Push APIs stripped → install
   banner, enable hidden), iOS installed-standalone emulation (fake push stack → subscribe

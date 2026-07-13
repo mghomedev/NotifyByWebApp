@@ -54,7 +54,7 @@ def get_notifications(page):
             const r = await navigator.serviceWorker.ready;
             const list = await r.getNotifications();
             return list.map(n => ({title:n.title, body:n.body, tag:n.tag,
-                                   data:n.data, icon:n.icon}));
+                                   data:n.data, icon:n.icon, badge:n.badge}));
         }"""
     )
 

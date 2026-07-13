@@ -13,11 +13,15 @@ FILES = {
     "ICON_192": "icon-192.png",
     "ICON_512": "icon-512.png",
     "APPLE_TOUCH_ICON": "apple-touch-icon.png",
+    "BADGE": "badge.png",
 }
 
 HEADER = '''"""App icons (PNG, base64-embedded — see scripts/make_icons.ps1 +
-scripts/embed_icons.py to regenerate). Full-bleed squares: safe for PWA
-"maskable" icons and iOS apple-touch-icon (no transparency)."""
+scripts/embed_icons.py to regenerate). ICON_192/512 + APPLE_TOUCH_ICON are
+full-bleed OPAQUE squares (safe for the PWA "maskable" purpose and iOS, which
+must not get transparency). BADGE is a MONOCHROME, TRANSPARENT silhouette used
+as the Android notification small icon (Android masks it to its alpha channel,
+so an opaque icon would show as a plain white square)."""
 import base64
 
 '''

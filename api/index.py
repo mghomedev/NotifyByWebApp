@@ -194,6 +194,8 @@ class handler(BaseHTTPRequestHandler):
                 self._send(200, icons.ICON_192, "image/png", cache=CACHE_ASSET)
             elif path == "/icon-512.png":
                 self._send(200, icons.ICON_512, "image/png", cache=CACHE_ASSET)
+            elif path == "/badge.png":
+                self._send(200, icons.BADGE, "image/png", cache=CACHE_ASSET)
             elif path in ("/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"):
                 self._send(
                     200, icons.APPLE_TOUCH_ICON, "image/png", cache=CACHE_ASSET

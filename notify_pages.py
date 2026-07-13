@@ -91,15 +91,25 @@ COMPAT_HTML = """<details class="compat">
 web push does not work in a Safari browser tab.</p>
 </details>"""
 
+# App mark: a white bell (notifications) with an amber wireless/broadcast signal
+# (top-right = "sent over the web / Web Push"), on the indigo brand gradient.
+# Geometry matches scripts/make_icons.ps1 (the PNG + badge generator).
 ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
 <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
 <stop offset="0" stop-color="#6366F1"/><stop offset="1" stop-color="#4338CA"/>
 </linearGradient></defs>
 <rect width="512" height="512" rx="115" fill="url(#g)"/>
-<circle cx="256" cy="124" r="18" fill="#fff"/>
-<path d="M256 140c-66 0-104 46-110 106l-9 84h238l-9-84c-6-60-44-106-110-106z" fill="#fff"/>
-<rect x="122" y="330" width="268" height="28" rx="14" fill="#fff"/>
-<circle cx="256" cy="390" r="24" fill="#fff"/>
+<g fill="#fff">
+<circle cx="231" cy="149" r="17"/>
+<path d="M231 150C172 150 136 196 131 252L123 330L339 330L331 252C326 196 290 150 231 150Z"/>
+<rect x="108" y="330" width="246" height="28" rx="14"/>
+<circle cx="229" cy="388" r="22"/>
+</g>
+<g fill="none" stroke="#FBBF24" stroke-linecap="round">
+<circle cx="384" cy="150" r="21" fill="#FBBF24" stroke="none"/>
+<path d="M379 102.3A48 48 0 0 1 412.2 188.8" stroke-width="14.4"/>
+<path d="M376.3 76.4A74 74 0 0 1 427.5 209.9" stroke-width="22.2"/>
+</g>
 </svg>
 """
 
@@ -117,7 +127,11 @@ body{margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
 background:var(--bg);color:var(--text);line-height:1.5;-webkit-text-size-adjust:100%}
 .wrap{max-width:640px;margin:0 auto;padding:12px 16px calc(48px + env(safe-area-inset-bottom))}
 header{display:flex;align-items:center;gap:12px;padding:14px 0 4px}
-header img{width:42px;height:42px}
+header img{width:46px;height:46px}
+.brand{display:flex;flex-direction:column;justify-content:center}
+.brand h1{line-height:1.05}
+.brandsub{font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+color:var(--muted);margin-top:2px}
 h1{font-size:1.35rem;margin:0}
 h2{font-size:1.05rem;margin:0 0 6px}
 .muted{color:var(--muted);font-size:.9rem}
@@ -277,7 +291,7 @@ if(seen.length)location.replace('/a#codes='+seen.map(encodeURIComponent).join(',
 </head>
 <body>
 <div class="wrap">
-<header><img src="/icon.svg" alt=""><h1>Notify <span class="muted">by Web App</span></h1></header>
+<header><img src="/icon.svg" alt=""><div class="brand"><h1>Notify</h1><span class="brandsub">by&nbsp;Web&nbsp;App</span></div></header>
 <p>Push notifications on your phone for anything — no app store, no account.
 A <strong>channel</strong> is identified by a secret code: anyone with the code can
 send and receive its messages.</p>
@@ -553,7 +567,7 @@ _APP_HTML_TEMPLATE = (
 <body>
 <div id="toasts"></div>
 <div class="wrap">
-<header><img src="/icon.svg" alt=""><h1>Notify</h1></header>
+<header><img src="/icon.svg" alt=""><div class="brand"><h1>Notify</h1><span class="brandsub">by&nbsp;Web&nbsp;App</span></div></header>
 <noscript><div class="banner">This app needs JavaScript.</div></noscript>
 <div class="banner" id="ios-hint" hidden>
 On iPhone/iPad, notifications only work for installed web apps:
@@ -1171,7 +1185,9 @@ if(nbody&&nbody===(d.title||''))nbody='';  // don't repeat the title in the noti
 var opts={
 body:nbody,
 icon:'/icon-192.png',
-badge:'/icon-192.png',
+// Android masks the status-bar small icon to its alpha channel, so a full-colour
+// opaque icon shows as a white square — use the monochrome transparent badge.
+badge:'/badge.png',
 data:{url:d.url||'/a'},
 timestamp:d.ts?d.ts*1000:Date.now()};
 if(d.tag)opts.tag=d.tag;

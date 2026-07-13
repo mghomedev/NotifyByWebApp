@@ -65,6 +65,9 @@ def test_push_displays_notification_with_correct_content(notif_page):
     assert n["tag"] == "msg-abc"
     assert n["data"]["url"] == "https://ci.example.com/run/9"
     assert n["icon"].endswith("/icon-192.png")
+    # the Android status-bar small icon uses the monochrome transparent badge,
+    # not the full-colour icon (which Android would render as a white square)
+    assert n["badge"].endswith("/badge.png")
 
 
 def test_push_without_url_targets_app_page(notif_page):

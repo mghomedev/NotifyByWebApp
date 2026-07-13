@@ -461,12 +461,18 @@ def test_service_worker_served_correctly(server):
 
 def test_static_assets(server):
     assert b"qrcode" in server.get("/vendor/qrcode.js").raw
-    assert server.get("/icon.svg").headers.get("Content-Type") == "image/svg+xml"
-    for path in ("/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"):
+    svg = server.get("/icon.svg")
+    assert svg.headers.get("Content-Type") == "image/svg+xml"
+    assert "#FBBF24" in svg.raw.decode()  # the amber broadcast-signal accent of the mark
+    for path in ("/icon-192.png", "/icon-512.png", "/apple-touch-icon.png", "/badge.png"):
         resp = server.get(path)
         assert resp.status == 200
         assert resp.headers.get("Content-Type") == "image/png"
         assert resp.raw[:8] == b"\x89PNG\r\n\x1a\n"
+    # The Android notification badge MUST carry an alpha channel (PNG colour type
+    # 4 or 6, byte 25 of the IHDR) — Android masks the small icon to its alpha, so
+    # an opaque icon would render as a plain white square in the status bar.
+    assert server.get("/badge.png").raw[25] in (4, 6)
     robots = server.get("/robots.txt").raw.decode()
     assert "Disallow: /api/" in robots and "Disallow: /a" in robots
 
