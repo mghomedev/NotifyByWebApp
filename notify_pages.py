@@ -46,6 +46,13 @@ limitation) any implied warranties of merchantability, fitness for a particular
 purpose, reliability, accuracy, security or availability. Message delivery is
 <strong>not guaranteed</strong> and may be delayed, duplicated, lost or fail entirely,
 and the service may change, break or shut down at any time without notice.</p>
+<p><strong>Delivery depends entirely on the device platform.</strong> This service relies
+solely on the built-in Web Push capabilities of Android, iOS and modern web browsers to let
+a simple web app send and receive notifications &mdash; it has <strong>no message-transport
+system of its own</strong> to end-user devices. All delivery, rate limiting and spam
+detection (including any false positives that may silently delay or drop messages) are
+handled entirely by the iOS, Android and web-browser platforms and are outside this
+service&rsquo;s control.</p>
 <p><strong>Do not rely on this service for any urgent, critical, medical, financial,
 safety-related or emergency notifications.</strong> To the maximum extent permitted
 by applicable law, the author and operator shall not be liable for any direct,
@@ -56,7 +63,13 @@ full responsibility for keeping your channel codes secret.</p>
 Quelloffenes, kostenloses, nicht-kommerzielles Hobby-Projekt, das jede Person einsehen,
 kopieren und selbst betreiben kann. Bereitgestellt &bdquo;wie besehen&ldquo; ohne
 jegliche Garantie f&uuml;r Verf&uuml;gbarkeit, Zuverl&auml;ssigkeit, Sicherheit oder
-die Zustellung von Nachrichten. Nicht f&uuml;r dringende, kritische, medizinische,
+die Zustellung von Nachrichten. Die Zustellung erfolgt ausschlie&szlig;lich &uuml;ber die
+integrierten Web-Push-Funktionen von Android, iOS und modernen Browsern; dieser Dienst
+besitzt <strong>kein eigenes &Uuml;bertragungssystem</strong> zu Endger&auml;ten. Zustellung,
+Ratenbegrenzung und Spam-Erkennung (einschlie&szlig;lich m&ouml;glicher Fehleinstufungen /
+False&nbsp;Positives) werden vollst&auml;ndig von den Plattformen iOS, Android und den
+Browser-Technologien &uuml;bernommen und liegen au&szlig;erhalb der Kontrolle dieses Dienstes.
+Nicht f&uuml;r dringende, kritische, medizinische,
 finanzielle oder sicherheitsrelevante Benachrichtigungen verwenden. Eine Haftung
 f&uuml;r Sch&auml;den ist &ndash; soweit gesetzlich zul&auml;ssig &ndash;
 ausgeschlossen.</p>

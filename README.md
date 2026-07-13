@@ -144,3 +144,11 @@ Free, open-source hobby project provided **"AS IS", without any warranty**. It m
 working at any time and there is no guarantee of support. Message delivery is not guaranteed
 — do not rely on it for urgent, critical, medical, or emergency notifications. **Use at your
 own risk.**
+
+**Delivery depends entirely on the device platform — this service has no message transport
+of its own.** NotifyByWebApp relies *solely* on the built-in **Web Push** capabilities of
+Android, iOS and modern web browsers to let a simple web app send and receive notifications.
+It does **not** operate its own transport channel to end-user devices. Consequently, all
+delivery, **rate limiting and spam detection — including any false positives that may
+silently delay or drop messages — are performed entirely by the iOS, Android and web-browser
+platforms**, outside this service's control.

@@ -10,6 +10,14 @@ from any third-party service. No accounts, no logins.
 **Disclaimer:** Hobby project, no warranty, may stop working anytime. Public repo:
 https://github.com/mghomedev/NotifyByWebApp
 
+**No own transport (clear + obvious, by design):** this service has **NO message-transport
+system of its own** to end-user devices. It relies *solely* on the built-in **Web Push** of
+Android, iOS and modern browsers to send/receive notifications. Therefore all delivery, **rate
+limiting and spam detection — including false positives that may silently delay or drop
+messages — are done entirely by the iOS/Android/browser platforms**, outside this service's
+control. This is stated in the user-facing bilingual disclaimer (`DISCLAIMER_HTML`, EN + DE)
+and in README.md; keep all three in sync.
+
 ## Core model
 
 - **Channel** = secret code (bearer capability), `secrets.token_urlsafe(24)` → 32 chars,
