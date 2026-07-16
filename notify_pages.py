@@ -747,7 +747,25 @@ function placeNotifCard(enabled){
 var card=$('#notif-card'),ch=$('#channels');
 if(!card||!ch)return;
 if(enabled)ch.after(card);else ch.before(card)}
+var _notifState='off',_enableWatch=null;
+// After the user taps Enable, the browser prompt + SW readiness + push-service subscribe +
+// server register can take a while on some devices. Tick a visible waiting counter each
+// second so the UI clearly reacts to the tap/grant, and settle into the actionable
+// 'timeout' state if nothing confirmed within ~30 s (window.__NBW_ENABLE_TIMEOUT overrides
+// in tests). If the real flow still finishes later, its ON/failed result overrides it.
+function startEnableWatch(){
+if(_enableWatch){clearInterval(_enableWatch);_enableWatch=null}
+var t0=Date.now();
+_enableWatch=setInterval(function(){
+if(_notifState!=='waiting'&&_notifState!=='enabling'){
+clearInterval(_enableWatch);_enableWatch=null;return}
+var ms=Date.now()-t0;
+if(ms>=(window.__NBW_ENABLE_TIMEOUT||30000)){
+clearInterval(_enableWatch);_enableWatch=null;updateNotifUI('timeout');return}
+if(_notifState==='enabling')$('#notif-state').textContent=
+'Waiting for notifications to be turned on\\u2026 ('+Math.round(ms/1000)+' s)'},1000)}
 function updateNotifUI(state){
+_notifState=state;
 var t=$('#notif-state'),b=$('#enable-btn');
 t.className='muted';b.hidden=true;
 if(state==='on'){t.textContent='Notifications are ON for this device.';
@@ -755,6 +773,9 @@ t.className='status-ok'}
 else if(state==='partial'){t.textContent='Notifications are ON (some channels could not be registered \\u2014 reopen to retry).';
 t.className='status-ok'}
 else if(state==='enabling'){t.textContent='Enabling notifications\\u2026 one moment.'}
+else if(state==='waiting'){t.textContent='Waiting for your OK \\u2014 please choose \\u201cAllow\\u201d in the browser\\u2019s notification prompt.'}
+else if(state==='timeout'){t.textContent='This is taking longer than expected. If you just allowed notifications they may still turn on in a moment \\u2014 otherwise tap the button to try again.';
+t.className='err';b.hidden=false}
 else if(state==='subfail'){t.textContent='Could not register with the server. Check your connection and tap again.';
 t.className='err';b.hidden=false}
 else if(state==='blocked'){t.textContent='Notifications are blocked for this site in your browser settings.'}
@@ -763,9 +784,9 @@ else if(state==='ios-install'){t.textContent='Install this app to your Home Scre
 else if(state==='unconfigured'){t.textContent='Push is not configured on this server yet (missing VAPID keys).'}
 else{t.textContent='Notifications are off.';b.hidden=false}
 // keep the Enable prompt (and its "works even when closed" note) on top until enabled;
-// while actively enabling, hide the note but keep the card on top until confirmed ON
+// while actively waiting/enabling, hide the note but keep the card on top until ON
 var enabled=(state==='on'||state==='partial');
-var why=$('#notif-why');if(why)why.hidden=(enabled||state==='enabling');
+var why=$('#notif-why');if(why)why.hidden=(enabled||state==='enabling'||state==='waiting');
 placeNotifCard(enabled)}
 
 // keep an offline mirror of {codes,key,subscription} in the Cache so the
@@ -818,13 +839,16 @@ return Promise.resolve(false)}
 if(Notification.permission==='denied'){updateNotifUI('blocked');return Promise.resolve(false)}
 if(!VAPID_PUBLIC_KEY){updateNotifUI('unconfigured');return Promise.resolve(false)}
 if(!codes.length){updateNotifUI('off');return Promise.resolve(false)}
+// react to the tap INSTANTLY: while the browser's permission prompt is up, say so
+if(interactive&&Notification.permission!=='granted'){
+updateNotifUI('waiting');startEnableWatch()}
 var permP=Notification.permission==='granted'?Promise.resolve('granted'):
 (interactive?Notification.requestPermission():Promise.resolve('default'));
 return permP.then(function(p){
 if(p!=='granted'){updateNotifUI(p==='denied'?'blocked':'off');return false}
-// the user just agreed in the browser prompt — reflect that instantly, before the
-// (slower) subscribe + server-register round-trip settles the final ON/failed state
-updateNotifUI('enabling');
+// the user agreed — show the ticking "waiting for notifications to be turned on"
+// counter while the (slower) subscribe + server-register round-trip settles
+updateNotifUI('enabling');startEnableWatch();
 return swReady().then(freshSubscription).then(function(sub){
 var body=sub.toJSON();
 // browser-level opt-in succeeded; remember intent so a transient server
@@ -1164,6 +1188,16 @@ ensureSubscribed(false).catch(function(){updateNotifUI('off')})}
 else if(pushSupported()&&Notification.permission==='denied'){updateNotifUI('blocked')}
 else if(!pushSupported()){updateNotifUI(isIOS()&&!isStandalone()?'ios-install':'unsupported')}
 else{updateNotifUI('off')}
+// Notice a permission change made OUTSIDE our own prompt (the browser's site settings or
+// a quiet-UI infobar): turn notifications on immediately instead of on the next reload —
+// otherwise the app looks like it "didn't notice" the user enabling them.
+if(pushSupported()&&navigator.permissions&&navigator.permissions.query){
+try{navigator.permissions.query({name:'notifications'}).then(function(st){
+st.onchange=function(){
+if(Notification.permission==='granted')
+ensureSubscribed(false).catch(function(){updateNotifUI('subfail')});
+else if(Notification.permission==='denied')updateNotifUI('blocked')}}).catch(function(){})
+}catch(e){}}
 })();
 </script>
 </body>

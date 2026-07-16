@@ -291,6 +291,68 @@ def test_enable_settles_and_never_hangs_when_sw_stalls(browser, server, channel)
         ctx.close()
 
 
+def test_enable_ticks_waiting_counter_then_times_out(browser, server, channel):
+    """While turning on, the UI must visibly tick ("Waiting for notifications to be
+    turned on… (N s)") and, if nothing confirms within the patience window (~30 s in
+    production, shrunk here), settle into an actionable timeout state — never look
+    unresponsive after the user agreed."""
+    ctx = browser.new_context(user_agent=IPHONE_UA, has_touch=True)
+    # SW never becomes ready; swReady's own timeout is pushed ABOVE the enable watch's
+    # window so only the watch can settle the UI (2.5 s here instead of 30 s)
+    ctx.add_init_script("window.__NBW_SW_TIMEOUT = 60000; window.__NBW_ENABLE_TIMEOUT = 2500;")
+    ctx.add_init_script(HANG_SW)
+    try:
+        page = ctx.new_page()
+        page.goto(server.base + "/a#codes=" + channel)
+        page.wait_for_selector(".channel")
+        page.click("#enable-btn")
+        # the ticking counter appears (permission is pre-granted in HANG_SW)
+        page.wait_for_selector(
+            "#notif-state:has-text('Waiting for notifications')", timeout=4000
+        )
+        # after the window the UI settles: actionable message + button back
+        page.wait_for_selector("#notif-state.err", timeout=6000)
+        assert "longer than expected" in page.text_content("#notif-state")
+        assert page.is_visible("#enable-btn")
+    finally:
+        ctx.close()
+
+
+def test_permission_granted_outside_prompt_is_noticed(browser, server, channel):
+    """If the user grants notification permission outside our button flow (browser site
+    settings / Chrome's quiet-UI infobar), the app must notice immediately via
+    permissions.onchange and turn notifications ON — not wait for the next reload."""
+    perm_flip = FAKE_STANDALONE_PUSH.replace(
+        "window.Notification.permission = 'granted';",
+        "window.Notification.permission = 'default';",
+    ) + """
+(function(){
+  var st = { state: 'prompt', onchange: null };
+  window.__permStatus = st;
+  var perms = { query: function(){ return Promise.resolve(st); } };
+  Object.defineProperty(navigator, 'permissions', {configurable:true, get:()=>perms});
+})();
+"""
+    ctx = browser.new_context(user_agent=IPHONE_UA, has_touch=True)
+    ctx.add_init_script(perm_flip)
+    try:
+        page = ctx.new_page()
+        page.goto(server.base + "/a#codes=" + channel)
+        page.wait_for_selector(".channel")
+        assert page.is_visible("#enable-btn")  # permission not granted yet -> off
+
+        # the user grants permission in the browser UI, NOT via our button
+        page.evaluate(
+            "() => { window.Notification.permission = 'granted';"
+            " if (window.__permStatus.onchange) window.__permStatus.onchange(); }"
+        )
+        # the app notices on its own and reaches the confirmed-ON state
+        page.wait_for_selector("#notif-state.status-ok", timeout=6000)
+        assert "on" in page.text_content("#notif-state").lower()
+    finally:
+        ctx.close()
+
+
 def test_installed_pwa_reports_error_when_server_rejects(browser, server):
     """If every /api/subscribe fails (here: an unknown/expired channel -> 404),
     the app must NOT claim notifications are ON — it must surface an error and

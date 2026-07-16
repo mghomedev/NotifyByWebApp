@@ -202,13 +202,19 @@ Users trust that saved channels persist locally; losing that state loses their c
   (`isIOS() && !isStandalone()`, enable button hidden); permission request must come from a
   user gesture (the “Enable notifications” button). `ensureSubscribed` reports ON only when
   the server accepted ≥1 channel (never a false ON on 404/409/502) — regression-tested.
-  **Enable UX**: the moment the browser prompt is granted the UI shows a transient
-  `'enabling'` state (button hidden, "Enabling notifications…") — instant feedback before the
-  slower subscribe + `/api/subscribe` round-trip settles ON/`partial`/`subfail`. `swReady()`
-  (re)registers the SW and waits for it, but with an **8 s timeout** (`window.__NBW_SW_TIMEOUT`
-  overrides it in tests) so a stalled activation can never leave the UI stuck on "Enabling…";
-  any failure settles into the actionable `subfail` state (button back, "tap again"), never a
-  bare error line — regression-tested (`test_enable_settles_and_never_hangs_when_sw_stalls`).
+  **Enable UX (must never look unresponsive)**: tapping Enable reacts INSTANTLY — a
+  `'waiting'` state while the browser prompt is up ("choose Allow…"), then on grant an
+  `'enabling'` state whose **enable watch ticks a visible counter every second**
+  ("Waiting for notifications to be turned on… (N s)") until the subscribe +
+  `/api/subscribe` round-trip settles ON/`partial`/`subfail`. The watch settles the UI into
+  an actionable `'timeout'` state after **30 s** (`window.__NBW_ENABLE_TIMEOUT` overrides in
+  tests; a later real result simply overrides the message). `swReady()` (re)registers the SW
+  with an **8 s timeout** (`window.__NBW_SW_TIMEOUT`) so a stalled activation can't hang the
+  flow; any failure settles into `subfail` (button back, "tap again"), never a bare error
+  line. A **`permissions.onchange` listener** notices a grant made OUTSIDE our prompt
+  (browser site settings / quiet-UI infobar) and turns notifications on immediately instead
+  of on the next reload. All regression-tested in `test_ui_platforms.py`
+  (SW-stall settles, ticking counter + timeout state, outside-grant noticed).
 - **VAPID key rotation**: the client compares `subscription.options.applicationServerKey`
   with the current key and re-subscribes on mismatch.
 - SW (`/sw.js`, `Service-Worker-Allowed: /`, no-cache): push → `showNotification` inside
@@ -274,7 +280,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 189 tests
+## Tests (pytest; must be green before every deploy) — 191 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends
@@ -310,8 +316,10 @@ Users trust that saved channels persist locally; losing that state loses their c
   incl. a Pixel device-emulation run (Android = Chrome).
 - `tests/test_ui_platforms.py` — iOS Safari-tab emulation (Push APIs stripped → install
   banner, enable hidden), iOS installed-standalone emulation (fake push stack → subscribe
-  registers on the server, UI ON), and the false-ON regression guard (server 404 → error
-  state, not ON).
+  registers on the server, UI ON), the false-ON regression guard (server 404 → error
+  state, not ON), and the enable-flow guards: a stalled SW settles (never stuck on
+  "Enabling…"), the ticking waiting counter + 30 s `'timeout'` state, and a permission
+  granted OUTSIDE the prompt is noticed via `permissions.onchange` → ON without reload.
 - Playwright suites auto-skip without Chromium/display: `python -m playwright install
   chromium`. The headed notification tests open a browser window; skip with
   `-k "not (notifications)"` if running unattended.
