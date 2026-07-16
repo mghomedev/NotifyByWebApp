@@ -754,6 +754,7 @@ if(state==='on'){t.textContent='Notifications are ON for this device.';
 t.className='status-ok'}
 else if(state==='partial'){t.textContent='Notifications are ON (some channels could not be registered \\u2014 reopen to retry).';
 t.className='status-ok'}
+else if(state==='enabling'){t.textContent='Enabling notifications\\u2026 one moment.'}
 else if(state==='subfail'){t.textContent='Could not register with the server. Check your connection and tap again.';
 t.className='err';b.hidden=false}
 else if(state==='blocked'){t.textContent='Notifications are blocked for this site in your browser settings.'}
@@ -761,9 +762,10 @@ else if(state==='unsupported'){t.textContent='This browser does not support web 
 else if(state==='ios-install'){t.textContent='Install this app to your Home Screen first (see banner above).'}
 else if(state==='unconfigured'){t.textContent='Push is not configured on this server yet (missing VAPID keys).'}
 else{t.textContent='Notifications are off.';b.hidden=false}
-// keep the Enable prompt (and its "works even when closed" note) on top until enabled
+// keep the Enable prompt (and its "works even when closed" note) on top until enabled;
+// while actively enabling, hide the note but keep the card on top until confirmed ON
 var enabled=(state==='on'||state==='partial');
-var why=$('#notif-why');if(why)why.hidden=enabled;
+var why=$('#notif-why');if(why)why.hidden=(enabled||state==='enabling');
 placeNotifCard(enabled)}
 
 // keep an offline mirror of {codes,key,subscription} in the Cache so the
@@ -797,6 +799,18 @@ if(s&&!subKeyMatches(s)){
 return s.unsubscribe().then(sub,sub)}
 return s||sub()})}
 
+// Resolve the active service worker registration, (re-)registering if needed, but never
+// hang: navigator.serviceWorker.ready waits forever if activation never completes (e.g. the
+// init register() failed), which would leave "Enabling notifications…" stuck. Time out so
+// the enable flow always settles into an actionable state instead.
+function swReady(){
+var to=window.__NBW_SW_TIMEOUT||8000;
+return Promise.race([
+navigator.serviceWorker.register('/sw.js').catch(function(){}).then(function(){
+return navigator.serviceWorker.ready}),
+new Promise(function(_,reject){setTimeout(function(){
+reject(new Error('service worker not ready'))},to)})])}
+
 function ensureSubscribed(interactive){
 if(!pushSupported()){
 updateNotifUI(isIOS()&&!isStandalone()?'ios-install':'unsupported');
@@ -808,7 +822,10 @@ var permP=Notification.permission==='granted'?Promise.resolve('granted'):
 (interactive?Notification.requestPermission():Promise.resolve('default'));
 return permP.then(function(p){
 if(p!=='granted'){updateNotifUI(p==='denied'?'blocked':'off');return false}
-return navigator.serviceWorker.ready.then(freshSubscription).then(function(sub){
+// the user just agreed in the browser prompt — reflect that instantly, before the
+// (slower) subscribe + server-register round-trip settles the final ON/failed state
+updateNotifUI('enabling');
+return swReady().then(freshSubscription).then(function(sub){
 var body=sub.toJSON();
 // browser-level opt-in succeeded; remember intent so a transient server
 // failure self-heals on next open, but never claim ON unless the server
@@ -1110,8 +1127,9 @@ if(!CODE_RE.test(v)){$('#add-error').textContent='Invalid code format.';return}
 $('#add-error').textContent='';$('#add-input').value='';
 addChannel(v)});
 $('#enable-btn').addEventListener('click',function(){
-ensureSubscribed(true).catch(function(e){
-$('#notif-state').textContent='Error: '+e.message})});
+// settle any unexpected failure into an actionable state (button back + "tap again"),
+// never leave the UI stuck on "Enabling…" or a bare error line
+ensureSubscribed(true).catch(function(){updateNotifUI('subfail')})});
 window.addEventListener('hashchange',function(){
 loadCodes();renderChannels();injectManifest();mirrorStateForSW();
 if(lsGet(LS_SUB,false))ensureSubscribed(false)});

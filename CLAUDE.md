@@ -202,6 +202,13 @@ Users trust that saved channels persist locally; losing that state loses their c
   (`isIOS() && !isStandalone()`, enable button hidden); permission request must come from a
   user gesture (the “Enable notifications” button). `ensureSubscribed` reports ON only when
   the server accepted ≥1 channel (never a false ON on 404/409/502) — regression-tested.
+  **Enable UX**: the moment the browser prompt is granted the UI shows a transient
+  `'enabling'` state (button hidden, "Enabling notifications…") — instant feedback before the
+  slower subscribe + `/api/subscribe` round-trip settles ON/`partial`/`subfail`. `swReady()`
+  (re)registers the SW and waits for it, but with an **8 s timeout** (`window.__NBW_SW_TIMEOUT`
+  overrides it in tests) so a stalled activation can never leave the UI stuck on "Enabling…";
+  any failure settles into the actionable `subfail` state (button back, "tap again"), never a
+  bare error line — regression-tested (`test_enable_settles_and_never_hangs_when_sw_stalls`).
 - **VAPID key rotation**: the client compares `subscription.options.applicationServerKey`
   with the current key and re-subscribes on mismatch.
 - SW (`/sw.js`, `Service-Worker-Allowed: /`, no-cache): push → `showNotification` inside
@@ -267,7 +274,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 188 tests
+## Tests (pytest; must be green before every deploy) — 189 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends

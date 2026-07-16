@@ -249,6 +249,48 @@ def test_mute_unsubscribes_and_unmute_resubscribes(browser, server):
         ctx.close()
 
 
+# A push stack whose service worker never becomes "ready" — emulates the case
+# where activation stalls, which previously left the UI stuck on the enable
+# prompt after the user granted permission.
+HANG_SW = """
+Object.defineProperty(navigator, 'standalone', {configurable:true, get:()=>true});
+window.Notification = function(){};
+window.Notification.permission = 'granted';
+window.Notification.requestPermission = () => Promise.resolve('granted');
+(function(){
+  var reg = { scope: location.origin + '/', pushManager: {
+      getSubscription: function(){ return Promise.resolve(null); },
+      subscribe: function(){ return Promise.resolve({endpoint:'https://fcm.googleapis.com/fcm/send/x',
+        options:{}, toJSON:function(){return {endpoint:this.endpoint, keys:{p256dh:'x', auth:'y'}};}}); } },
+    showNotification: function(){ return Promise.resolve(); } };
+  var fakeSW = {
+    register: function(){ return Promise.resolve(reg); },
+    ready: new Promise(function(){}),   // never resolves
+    getRegistrations: function(){ return Promise.resolve([reg]); },
+    addEventListener: function(){}, controller: null };
+  Object.defineProperty(navigator, 'serviceWorker', {configurable:true, get:()=>fakeSW});
+})();
+"""
+
+
+def test_enable_settles_and_never_hangs_when_sw_stalls(browser, server, channel):
+    ctx = browser.new_context(user_agent=IPHONE_UA, has_touch=True)
+    ctx.add_init_script("window.__NBW_SW_TIMEOUT = 400;")  # fail fast for the test
+    ctx.add_init_script(HANG_SW)
+    try:
+        page = ctx.new_page()
+        page.goto(server.base + "/a#codes=" + channel)
+        page.wait_for_selector(".channel")
+        page.click("#enable-btn")
+        # the service worker never becomes ready; the enable flow must NOT stay stuck on
+        # "Enabling…" — it settles to an actionable failure with the button back
+        page.wait_for_selector("#notif-state.err", timeout=6000)
+        assert page.is_visible("#enable-btn")
+        assert "enabling" not in page.text_content("#notif-state").lower()
+    finally:
+        ctx.close()
+
+
 def test_installed_pwa_reports_error_when_server_rejects(browser, server):
     """If every /api/subscribe fails (here: an unknown/expired channel -> 404),
     the app must NOT claim notifications are ON — it must surface an error and

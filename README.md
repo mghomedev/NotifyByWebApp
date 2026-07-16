@@ -126,7 +126,7 @@ only in local `.env` files (gitignored) and Vercel environment variables.
 python -m venv .venv && . .venv/Scripts/activate   # .venv/bin/activate on Linux/macOS
 pip install -r requirements-dev.txt
 python -m playwright install chromium              # once, for the browser UI tests
-python -m pytest                                   # 188 tests, fully offline
+python -m pytest                                   # 189 tests, fully offline
 ```
 
 Tests include real-crypto Web Push (a fake device decrypts the actual payload) and browser
