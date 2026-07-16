@@ -62,8 +62,12 @@ redirect on `/` (`location.replace('/a#codes=…')`, built from the saved store)
 page STARTS with their channels + messages + send, not the create form. The redirect is
 **skipped** on `?create` (the escape hatch every in-app "start page" link uses), when saving
 is opted out (`nbw_nosave`), or when the saved set is empty / all-tombstoned; `/a` never
-redirects back, so there is no loop. On `/a` the channels list (`#channels`) is rendered
-**above** the notifications card so saved channels are the first thing shown. The generator
+redirects back, so there is no loop. On `/a` the **Enable-notifications card** (`#notif-card`)
+leads while notifications are **not yet enabled** — the app can only alert the user once
+enabled, so the prompt (plus a warning that it turns on system notifications that work even
+when the app/browser is closed, `#notif-why`) must stay on top; `placeNotifCard()` in
+`updateNotifUI` moves it **below** `#channels` only once enabled (`on`/`partial`). The static
+default is card-first (correct before JS runs). The generator
 is ordered **end-user-first** (top→down = less→more technical): (1) create your channel → shows the
 code + QR + app link together, plus a **visible** "Your channels" list (`#your-channels`
 + `#code-list`, shown whenever there are codes — must NOT be hidden in an expander) and a
@@ -263,7 +267,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 187 tests
+## Tests (pytest; must be green before every deploy) — 188 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends

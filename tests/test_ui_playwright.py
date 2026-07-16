@@ -501,6 +501,23 @@ def test_app_page_header_shows_web_app_subtitle(server, page, channel):
     assert sub == "by Web App"
 
 
+def test_app_page_enable_prompt_stays_on_top_until_enabled(server, page, channel):
+    # headless denies notification permission -> notifications are NOT enabled. The Enable
+    # prompt must sit ABOVE the channels list (the app can't alert the user until then), and
+    # it must clearly warn that this turns on system notifications that work even when closed.
+    page.goto(server.base + "/a#codes=" + channel)
+    page.wait_for_selector("#notif-card")
+    notif_first = page.evaluate(
+        "() => {var n=document.getElementById('notif-card'),"
+        "c=document.getElementById('channels');"
+        "return !!(n.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING);}"
+    )
+    assert notif_first
+    assert page.is_visible("#notif-why")
+    why = page.text_content("#notif-why").lower()
+    assert "system notification" in why and "closed" in why
+
+
 def test_unknown_code_shows_friendly_error(server, page):
     page.goto(server.base + "/a#codes=this_code_does_not_exist_123456")
     page.wait_for_selector(".channel h2:has-text('Unknown channel')")

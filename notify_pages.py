@@ -234,6 +234,8 @@ font-size:.72rem;line-height:1.55;color:var(--muted)}
 .compat-table th,.compat-table td{padding:7px 12px 7px 0;border-top:1px solid var(--border)}
 .compat-table tr:first-child th,.compat-table tr:first-child td{border-top:0}
 .warn-banner{background:#b45309}
+.notif-why{margin:10px 0 0;padding:9px 11px;border-radius:9px;font-size:.85rem;line-height:1.4;
+background:rgba(251,191,36,.15);border:1px solid rgba(251,191,36,.55)}
 .save-status{font-size:.9rem;margin:2px 0}
 .save-status.ok{color:var(--ok);font-weight:600}
 .save-status.off{color:var(--danger);font-weight:600}
@@ -575,13 +577,14 @@ open the <strong>Share</strong> menu, choose <strong>Add to Home Screen</strong>
 then open Notify from your Home Screen and enable notifications there.
 </div>
 <div class="banner warn-banner" id="too-old" hidden></div>
-<div id="channels"></div>
 <div class="card" id="notif-card">
 <h2>Notifications</h2>
 <div id="notif-state" class="muted">Notifications are off.</div>
 <button id="enable-btn">Enable notifications</button>
+<p id="notif-why" class="notif-why">&#9888; This turns on real <strong>system notifications</strong>: once enabled you receive messages <strong>even when this app and your browser are closed</strong>. Until you enable it, new messages only appear while this page is open.</p>
 __COMPAT__
 </div>
+<div id="channels"></div>
 <div class="card">
 <h2>Add a channel</h2>
 <input id="add-input" placeholder="Paste a channel code" autocomplete="off">
@@ -737,6 +740,13 @@ var b=atob((s+pad).replace(/-/g,'+').replace(/_/g,'/'));
 var a=new Uint8Array(b.length);
 for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);
 return a}
+// While notifications are not yet enabled the app cannot alert the user (it only updates
+// while a tab is open), so keep the Enable prompt at the very top; once enabled, let the
+// channels and their messages lead. Static default = card first (correct before JS runs).
+function placeNotifCard(enabled){
+var card=$('#notif-card'),ch=$('#channels');
+if(!card||!ch)return;
+if(enabled)ch.after(card);else ch.before(card)}
 function updateNotifUI(state){
 var t=$('#notif-state'),b=$('#enable-btn');
 t.className='muted';b.hidden=true;
@@ -750,7 +760,11 @@ else if(state==='blocked'){t.textContent='Notifications are blocked for this sit
 else if(state==='unsupported'){t.textContent='This browser does not support web push notifications.'}
 else if(state==='ios-install'){t.textContent='Install this app to your Home Screen first (see banner above).'}
 else if(state==='unconfigured'){t.textContent='Push is not configured on this server yet (missing VAPID keys).'}
-else{t.textContent='Notifications are off.';b.hidden=false}}
+else{t.textContent='Notifications are off.';b.hidden=false}
+// keep the Enable prompt (and its "works even when closed" note) on top until enabled
+var enabled=(state==='on'||state==='partial');
+var why=$('#notif-why');if(why)why.hidden=enabled;
+placeNotifCard(enabled)}
 
 // keep an offline mirror of {codes,key,subscription} in the Cache so the
 // service worker can re-subscribe on 'pushsubscriptionchange' (it cannot

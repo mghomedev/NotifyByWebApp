@@ -156,6 +156,14 @@ window.Notification.requestPermission = () => Promise.resolve('granted');
 """
 
 
+# True iff the Enable-notifications card sits ABOVE the channels list in the DOM.
+NOTIF_FIRST_JS = (
+    "() => {var n=document.getElementById('notif-card'),"
+    "c=document.getElementById('channels');"
+    "return !!(n.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING);}"
+)
+
+
 def test_ios_installed_pwa_subscribe_registers_on_server(browser, server, channel):
     ctx = browser.new_context(
         user_agent=IPHONE_UA,
@@ -172,12 +180,26 @@ def test_ios_installed_pwa_subscribe_registers_on_server(browser, server, channe
         # no install banner in standalone mode
         assert page.is_hidden("#ios-hint")
 
+        # NOT enabled yet: the Enable prompt must be ABOVE the channels, and its warning
+        # that this turns on system notifications (working even when closed) is shown
+        assert page.evaluate(NOTIF_FIRST_JS) is True
+        assert page.is_visible("#notif-why")
+        assert "closed" in page.text_content("#notif-why").lower()
+
         # user taps "Enable notifications"
         page.click("#enable-btn")
 
         # UI reports ON only after the server accepted the subscription
         page.wait_for_selector("#notif-state.status-ok")
         assert "on" in page.text_content("#notif-state").lower()
+
+        # once enabled, the channels lead (prompt drops below) and the warning is gone
+        page.wait_for_function(
+            "() => {var n=document.getElementById('notif-card'),"
+            "c=document.getElementById('channels');"
+            "return !!(c.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING);}"
+        )
+        assert page.is_hidden("#notif-why")
 
         # and the server really recorded this device as a subscriber
         page.wait_for_function(
