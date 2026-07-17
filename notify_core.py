@@ -427,6 +427,7 @@ class MemoryStorage:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._ch: "dict[str, dict]" = {}
+        self._kv: "dict[str, str]" = {}
 
     def _entry(self, kh: str) -> "dict | None":
         return self._ch.get(kh)
@@ -526,6 +527,14 @@ class MemoryStorage:
 
     def touch(self, kh: str, ttl: int) -> None:
         pass
+
+    def get_value(self, key: str) -> "str | None":
+        with self._lock:
+            return self._kv.get(key)
+
+    def set_value(self, key: str, value: str, ttl: int) -> None:
+        with self._lock:
+            self._kv[key] = value
 
     def ping(self) -> bool:
         return True
@@ -666,6 +675,12 @@ class RedisStorage:
             ]
         )
 
+    def get_value(self, key: str) -> "str | None":
+        return self._pipeline([["GET", "nbw:" + key]])[0]
+
+    def set_value(self, key: str, value: str, ttl: int) -> None:
+        self._pipeline([["SET", "nbw:" + key, value, "EX", str(ttl)]])
+
     def ping(self) -> bool:
         return self._pipeline([["PING"]])[0] == "PONG"
 
@@ -731,6 +746,67 @@ def diagnostics() -> dict:
             "max_messages": max_messages(),
             "channel_ttl_days": channel_ttl_seconds() // 86400,
         },
+    }
+
+
+# ------------------------------------------------- deployed-commit footer
+
+GITHUB_REPO = "mghomedev/NotifyByWebApp"
+
+# sha -> "YYYY-MM-DD" | None; one GitHub-API fetch attempt per instance at
+# most (and usually zero, thanks to the Redis cache written on first fetch)
+_commit_dates: "dict[str, str | None]" = {}
+
+
+def _fetch_commit_date(sha: str) -> "str | None":
+    """Commit date for the traceability footer. Vercel's env exposes the SHA
+    but NOT the commit date, so it is looked up once per deploy from the
+    public GitHub API (fixed host, no user input) and cached in storage —
+    every later instance/cold start gets it from Redis. Failures degrade
+    gracefully to None (the footer then shows just the linked hash)."""
+    key = "cdate:" + sha
+    try:
+        cached = get_storage().get_value(key)
+        if cached:
+            return cached
+    except StorageError:
+        pass
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{GITHUB_REPO}/commits/{sha}",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "notify-by-web-app",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        date = ((data.get("commit") or {}).get("committer") or {}).get("date")
+        if not (isinstance(date, str) and len(date) >= 10):
+            return None
+        date = date[:10]  # YYYY-MM-DD (UTC committer date)
+    except Exception:
+        return None
+    try:
+        get_storage().set_value(key, date, 400 * 86400)
+    except StorageError:
+        pass
+    return date
+
+
+def commit_info() -> "dict | None":
+    """{sha, short, date, url} of the deployed commit, or None outside a
+    git-connected deployment (local dev / tests)."""
+    sha = (os.environ.get("VERCEL_GIT_COMMIT_SHA") or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{7,40}", sha):
+        return None
+    if sha not in _commit_dates:
+        _commit_dates[sha] = _fetch_commit_date(sha)
+    return {
+        "sha": sha,
+        "short": sha[:7],
+        "date": _commit_dates[sha],
+        "url": f"https://github.com/{GITHUB_REPO}/commit/{sha}",
     }
 
 

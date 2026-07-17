@@ -169,10 +169,10 @@ class handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         try:
             if path == "/":
-                self._html(pages.index_html())
+                self._html(pages.index_html(core.commit_info()))
             elif path == "/a":
                 _, public_key, _ = core.vapid_config()
-                self._html(pages.app_html(public_key))
+                self._html(pages.app_html(public_key, core.commit_info()))
             elif path == "/sw.js":
                 self._send(
                     200,

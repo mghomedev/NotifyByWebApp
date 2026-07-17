@@ -96,7 +96,22 @@ Nicht f&uuml;r dringende, kritische, medizinische,
 finanzielle oder sicherheitsrelevante Benachrichtigungen verwenden. Eine Haftung
 f&uuml;r Sch&auml;den ist &ndash; soweit gesetzlich zul&auml;ssig &ndash;
 ausgeschlossen.</p>
+__COMMIT__
 </div>"""
+
+
+def _commit_html(commit: "dict | None") -> str:
+    """Traceability footer line: the exact deployed commit, linked to GitHub.
+    The sha is validated hex (core.commit_info), so it is HTML-safe. The date
+    can be missing (GitHub unreachable) — then only the linked hash shows."""
+    if not commit or not commit.get("sha"):
+        return ""
+    date = " of " + commit["date"] if commit.get("date") else ""
+    return (
+        '<p class="deploy-line">Deployed version: commit '
+        f'<a href="{commit["url"]}" rel="noopener">{commit["short"]}</a>{date}'
+        " &mdash; exactly this open-source code is running.</p>"
+    )
 
 # Compatibility list (shared on both pages via the __COMPAT__ placeholder).
 # Minimum versions verified 2026 — see CLAUDE.md "Web Push facts".
@@ -320,6 +335,7 @@ font-size:.72rem;line-height:1.55;color:var(--muted)}
 .disclaimer p:last-child{margin-bottom:0}
 .disclaimer strong{color:var(--text)}
 .disclaimer a{color:var(--accent)}
+.deploy-line{font-size:.72rem;opacity:.85}
 .compat{margin:14px 0}
 .compat>summary{cursor:pointer;color:var(--accent);font-weight:600}
 .compat-scroll{overflow-x:auto}
@@ -1818,7 +1834,7 @@ body:JSON.stringify({code:code,subscription:body})}).catch(function(){})}))})})
 SW_JS = _SW_JS_TEMPLATE.replace("__NBW_DB__", _NBW_DB_JS)
 
 
-def index_html() -> str:
+def index_html(commit: "dict | None" = None) -> str:
     # On the landing page the compatibility list is expanded by default so the
     # supported devices are visible without a click; the app page keeps it
     # collapsed to stay tidy above the channel list.
@@ -1829,14 +1845,16 @@ def index_html() -> str:
         INDEX_HTML.replace("__DISCLAIMER__", DISCLAIMER_HTML)
         .replace("__COMPAT__", compat_open)
         .replace("__NBW_DB__", _NBW_DB_JS)
+        .replace("__COMMIT__", _commit_html(commit))
     )
 
 
-def app_html(vapid_public_key: str) -> str:
+def app_html(vapid_public_key: str, commit: "dict | None" = None) -> str:
     key = re.sub(r"[^A-Za-z0-9_-]", "", vapid_public_key or "")
     return (
         _APP_HTML_TEMPLATE.replace("__VAPID_PUBLIC_KEY__", key)
         .replace("__DISCLAIMER__", DISCLAIMER_HTML)
         .replace("__COMPAT__", COMPAT_HTML)
         .replace("__NBW_DB__", _NBW_DB_JS)
+        .replace("__COMMIT__", _commit_html(commit))
     )

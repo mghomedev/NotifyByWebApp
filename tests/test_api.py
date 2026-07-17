@@ -645,6 +645,28 @@ def test_extend_channel_endpoint(server, push_calls):
     assert ghost.status == 404
 
 
+def test_deploy_commit_footer_on_both_pages(server, env):
+    sha = "abc123def456" + "0" * 28
+    env.setenv("VERCEL_GIT_COMMIT_SHA", sha)
+    env.setattr(core, "_commit_dates", {})
+    env.setattr(core, "_fetch_commit_date", lambda s: "2026-07-16")
+    for path in ("/", "/a"):
+        html = server.get(path).raw.decode()
+        assert 'class="deploy-line"' in html
+        assert f"https://github.com/{core.GITHUB_REPO}/commit/{sha}" in html
+        assert ">abc123d</a> of 2026-07-16" in html  # linked short hash + date
+    # a missing date degrades to the linked hash alone
+    env.setattr(core, "_commit_dates", {sha: None})
+    html = server.get("/").raw.decode()
+    assert ">abc123d</a>" in html and "of 2026" not in html
+
+
+def test_no_deploy_footer_outside_git_deployments(server):
+    # the env fixture clears VERCEL_GIT_COMMIT_SHA (local dev / tests)
+    for path in ("/", "/a"):
+        assert 'class="deploy-line"' not in server.get(path).raw.decode()
+
+
 def test_message_store_via_api(server, push_calls):
     # default channel: server stores nothing — pure relay
     plain = server.post("/api/channel", {"name": "Anon"}).json

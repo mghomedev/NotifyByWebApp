@@ -633,6 +633,79 @@ def test_extend_channel_copies_meta_and_messages(env, push_calls):
     assert mig["exp"] == old["expires"]  # SW suppresses it after the old end date
 
 
+# ------------------------------------------------- deployed-commit footer
+
+
+def test_commit_info_absent_or_invalid_sha(env):
+    assert core.commit_info() is None  # env fixture clears VERCEL_GIT_COMMIT_SHA
+    env.setenv("VERCEL_GIT_COMMIT_SHA", "not-hex-at-all!")
+    assert core.commit_info() is None
+
+
+def test_commit_info_fetches_once_per_instance(env):
+    env.setenv("VERCEL_GIT_COMMIT_SHA", "ab12cd34" * 5)
+    calls = []
+    env.setattr(core, "_commit_dates", {})
+    env.setattr(
+        core, "_fetch_commit_date", lambda sha: calls.append(sha) or "2026-07-16"
+    )
+    info = core.commit_info()
+    assert info["short"] == "ab12cd3" and info["date"] == "2026-07-16"
+    assert info["url"].startswith("https://github.com/") and info["sha"] in info["url"]
+    core.commit_info()
+    assert len(calls) == 1  # module-cached, no refetch
+
+
+def test_fetch_commit_date_uses_storage_cache_then_github(env):
+    core.reset_storage_for_tests()
+    sha = "1234abcd" * 5
+    # cached in storage → no network call at all
+    core.get_storage().set_value("cdate:" + sha, "2026-01-02", 60)
+    env.setattr(
+        core.urllib.request,
+        "urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("network hit")),
+    )
+    assert core._fetch_commit_date(sha) == "2026-01-02"
+
+    # not cached → fetched from the GitHub API, then written back to storage
+    class _Resp:
+        def read(self):
+            return json.dumps(
+                {"commit": {"committer": {"date": "2026-07-16T12:34:56Z"}}}
+            ).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    env.setattr(core.urllib.request, "urlopen", lambda *a, **k: _Resp())
+    sha2 = "feedbeef" * 5
+    assert core._fetch_commit_date(sha2) == "2026-07-16"
+    assert core.get_storage().get_value("cdate:" + sha2) == "2026-07-16"
+    # a failing fetch degrades to None (footer shows just the linked hash)
+    env.setattr(
+        core.urllib.request,
+        "urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("down")),
+    )
+    assert core._fetch_commit_date("0" * 40) is None
+
+
+def test_storage_kv_roundtrip():
+    st = core.MemoryStorage()
+    assert st.get_value("k") is None
+    st.set_value("k", "v", 60)
+    assert st.get_value("k") == "v"
+    fr = FakeRedis([["OK"], ["v"]])
+    fr.set_value("cdate:x", "v", 60)
+    fr.get_value("cdate:x")
+    assert fr.calls[0][0] == ["SET", "nbw:cdate:x", "v", "EX", "60"]
+    assert fr.calls[1][0] == ["GET", "nbw:cdate:x"]
+
+
 # ---------------------------------------------------- message storage opt-in
 
 

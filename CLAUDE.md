@@ -211,6 +211,17 @@ Users trust that saved channels persist locally; losing that state loses their c
 - `notify_icons.py` / `notify_vendor.py` — base64-embedded PNGs / vendored
   qrcode-generator 1.4.4 (MIT, served from `/vendor/qrcode.js`; no CDN → CSP stays
   `script-src 'self' 'unsafe-inline'`).
+- **Deployed-commit footer (traceability)**: both pages end with a small
+  `.deploy-line` inside the shared disclaimer (`__COMMIT__` placeholder →
+  `_commit_html`, next to the GitHub mention): the exact deployed commit hash
+  **linked to the commit on GitHub** plus the commit date — so users can see exactly
+  which open-source state they are running. `core.commit_info()` reads
+  `VERCEL_GIT_COMMIT_SHA` (validated hex → HTML-safe; absent locally → no footer).
+  Vercel does NOT expose the commit date, so it is fetched ONCE per deploy from the
+  public GitHub API (`_fetch_commit_date`, fixed host, 4 s timeout) and cached in
+  storage (`nbw:cdate:{sha}`, generic `get_value`/`set_value` on both backends) +
+  module memory; any failure degrades gracefully to hash-only. No requests from
+  visitors' browsers, no CSP change.
 - **App mark / icons**: a white **bell** with an amber **wireless/broadcast signal**
   (top-right = "sent over the web / Web Push") on the indigo brand gradient — distinctive,
   not a generic bell. Geometry is defined once and kept in sync between `ICON_SVG`
@@ -360,7 +371,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 222 tests
+## Tests (pytest; must be green before every deploy) — 228 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends

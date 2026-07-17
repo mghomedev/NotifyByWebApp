@@ -180,13 +180,17 @@ app-link QR** — keep those and you can always restore a channel.
 No personal data and no secrets are ever committed to this repository; runtime secrets live
 only in local `.env` files (gitignored) and Vercel environment variables.
 
+For traceability, every deployed page shows the **exact deployed commit** (hash linked to
+the commit on GitHub, plus its commit date) in the small footer at the bottom — so users
+can always see precisely which state of this open-source code they are using.
+
 ## Development
 
 ```bash
 python -m venv .venv && . .venv/Scripts/activate   # .venv/bin/activate on Linux/macOS
 pip install -r requirements-dev.txt
 python -m playwright install chromium              # once, for the browser UI tests
-python -m pytest                                   # 222 tests, fully offline
+python -m pytest                                   # 228 tests, fully offline
 ```
 
 Tests include real-crypto Web Push (a fake device decrypts the actual payload) and browser
