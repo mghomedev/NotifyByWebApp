@@ -38,7 +38,12 @@ and in README.md; keep all three in sync.
   `_live_meta` additionally treats an expired channel as unknown (404) on every read/write
   path (covers MemoryStorage and clock lag). Clients parse the suffix **locally**
   (`codeExpiry`/`expiryLabel` in both pages, `swCodeExpired` in the SW) — works offline and
-  after the server data is already gone.
+  after the server data is already gone. The create-form label leads with **"Expire time*"**
+  (immediately readable as time-based) and its asterisk points at a footnote
+  (`#auto-remove-note`, repeated in the `/a` extend dialog) stating the honest limitation:
+  auto-removal deletes the server data and the app entry, but **cannot remotely delete
+  messages/notifications already delivered to other devices** — each device keeps its own
+  copy until cleared there.
 - **Extending** = `/api/channel/extend` (old `code` + new `auto_remove_days` +
   `send_password` if the channel is protected; same creation soft cap): creates a
   **successor channel** — new code/QR — inheriting the name, the send-password hash and all

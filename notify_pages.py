@@ -210,6 +210,8 @@ font-size:1.15rem;line-height:1;cursor:pointer;opacity:.85;padding:0}
 .channel-latest{font-size:.72rem;color:var(--muted);margin-top:2px}
 .expiry{font-size:.8rem;color:var(--muted);margin-top:3px}
 .expiry-soon{color:#b45309;font-weight:600}
+.fn-mark{color:#b45309;font-weight:700}
+.fn-note{font-size:.78rem;line-height:1.45}
 .share-ends{font-size:.85rem;color:#b45309;font-weight:600}
 .extend-notify{display:flex;gap:8px;align-items:flex-start;font-size:.85rem;margin:6px 0}
 .extend-notify input{width:auto;margin:2px 0 0}
@@ -313,7 +315,7 @@ send and receive its messages.</p>
 <p class="muted">You get a secret channel code. Save it — it cannot be recovered.</p>
 <input id="channel-name" maxlength="80" placeholder="Channel name (optional)" autocomplete="off">
 <input id="channel-password" maxlength="128" placeholder="Send password (optional; only holders can send)" autocomplete="off">
-<label for="auto-remove">Auto-remove this channel (it deletes itself, with all messages and subscriptions):</label>
+<label for="auto-remove">Expire time<span class="fn-mark">*</span> &mdash; auto-remove this channel after a set time (it deletes itself, with all messages and subscriptions):</label>
 <select id="auto-remove">
 <option value="" selected>never</option>
 <option value="1">after 1 day</option>
@@ -323,6 +325,11 @@ send and receive its messages.</p>
 <option value="custom">after a custom number of days&hellip;</option>
 </select>
 <input id="auto-remove-days" type="number" min="1" max="3650" placeholder="Number of days (1&ndash;3650)" hidden>
+<p class="muted fn-note" id="auto-remove-note">* On the expire day the channel, its stored
+messages and all subscriptions are deleted on the server, and the channel disappears from
+the app. It <strong>cannot remotely delete messages from other people's devices</strong>
+&mdash; each device keeps its own copy of notifications and messages it already received,
+until they are cleared there.</p>
 <button id="create-btn">Create channel</button>
 <p class="err" id="create-error"></p>
 <div id="create-result" hidden>
@@ -1079,6 +1086,8 @@ var ext=document.createElement('details');ext.className='extend-details';
 ext.appendChild(el('summary','','\\u23F3 Extend / change the end date'));
 ext.appendChild(el('p','muted','Creates a NEW channel (new code + QR) with the same name and all current messages. '
 +'Everyone must re-subscribe via the new QR/link \\u2014 the old channel still ends on '+endLabel+'.'));
+ext.appendChild(el('p','muted fn-note','Auto-removal deletes the channel and its messages on the server; '
++'it cannot remotely delete messages already delivered to other devices \\u2014 each device keeps its own copy.'));
 var esel=document.createElement('select');esel.className='extend-days';
 [['','no end date (never)'],['1','1 day from now'],['7','1 week from now'],
 ['30','1 month from now'],['365','1 year from now'],['custom','custom number of days\\u2026']]

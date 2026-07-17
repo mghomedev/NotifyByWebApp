@@ -47,6 +47,9 @@ the server.
   name, send-password and all messages, and can notify current subscribers with a one-tap
   "switch to the new channel" notification. A notification that arrives late, after the
   end date, is replaced by a "Channel expired" notice instead of showing stale content.
+  Note: auto-removal deletes the channel on the server and in the app — it **cannot
+  remotely delete** messages or notifications already delivered to other people's devices;
+  each device keeps its own copy until it is cleared there.
 - Channels are **sorted by latest activity**, with local-time timestamps, newest on top.
 - Your channels are **saved automatically** on your device (see below).
 

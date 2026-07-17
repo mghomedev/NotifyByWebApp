@@ -520,6 +520,12 @@ def test_app_page_enable_prompt_stays_on_top_until_enabled(server, page, channel
 
 def test_landing_create_with_auto_remove(server, page):
     page.goto(server.base + "/?create")
+    # the label makes the time-based nature explicit, and its asterisk points at
+    # the footnote that auto-removal cannot reach into other people's devices
+    label = page.text_content("label[for='auto-remove']")
+    assert "Expire time" in label and "*" in label
+    note = page.text_content("#auto-remove-note")
+    assert "cannot remotely delete" in note and "its own copy" in note
     page.fill("#channel-name", "Timed")
     page.select_option("#auto-remove", "7")
     page.click("#create-btn")
