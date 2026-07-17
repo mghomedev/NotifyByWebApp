@@ -247,6 +247,8 @@ class handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/channel":
                 self._post_channel(payload)
+            elif path == "/api/channel/extend":
+                self._post_channel_extend(payload)
             elif path == "/api/subscribe":
                 self._post_subscribe(payload)
             elif path == "/api/unsubscribe":
@@ -301,7 +303,31 @@ class handler(BaseHTTPRequestHandler):
             return
         name = core.clean_channel_name(payload.get("name"))
         send_password = core.clean_send_password(payload.get("send_password"))
-        result = core.create_channel(name, send_password)
+        days = core.validate_auto_remove_days(payload.get("auto_remove_days"))
+        result = core.create_channel(name, send_password, days)
+        self._json(200, {"ok": True, **result})
+
+    def _post_channel_extend(self, payload: dict) -> None:
+        # extending creates a successor channel — same soft cap as creation
+        if not core.limiter.allow("@channel-create", core.max_channels_per_min()):
+            self._send(
+                429,
+                json.dumps({"ok": False, "error": "too many new channels, slow down"}),
+                "application/json",
+                {"Retry-After": "60", "Access-Control-Allow-Origin": "*"},
+            )
+            return
+        code = self._get_code(payload)
+        if code is None:
+            return
+        days = core.validate_auto_remove_days(payload.get("auto_remove_days"))
+        notify = payload.get("notify", True)
+        result = core.extend_channel(
+            code, days, payload.get("send_password"), notify=bool(notify)
+        )
+        if result is None:
+            self._error(404, "unknown channel")
+            return
         self._json(200, {"ok": True, **result})
 
     def _post_subscribe(self, payload: dict) -> None:

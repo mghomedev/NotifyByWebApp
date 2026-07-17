@@ -137,7 +137,7 @@ h2{font-size:1.05rem;margin:0 0 6px}
 .muted{color:var(--muted);font-size:.9rem}
 .card{background:var(--card);border:1px solid var(--border);border-radius:14px;
 padding:16px;margin:14px 0;overflow-wrap:anywhere}
-input,textarea{width:100%;padding:10px 12px;margin:6px 0;border:1px solid var(--border);
+input,textarea,select{width:100%;padding:10px 12px;margin:6px 0;border:1px solid var(--border);
 border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
 label{display:block;font-size:.8rem;color:var(--muted);margin:10px 0 2px}
 code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85em;
@@ -208,6 +208,11 @@ font-size:1.15rem;line-height:1;cursor:pointer;opacity:.85;padding:0}
 .msgs-hint{font-size:.72rem;color:var(--muted);text-align:right;margin-bottom:2px}
 .msg-link{margin-top:3px;font-size:.85rem}
 .channel-latest{font-size:.72rem;color:var(--muted);margin-top:2px}
+.expiry{font-size:.8rem;color:var(--muted);margin-top:3px}
+.expiry-soon{color:#b45309;font-weight:600}
+.share-ends{font-size:.85rem;color:#b45309;font-weight:600}
+.extend-notify{display:flex;gap:8px;align-items:flex-start;font-size:.85rem;margin:6px 0}
+.extend-notify input{width:auto;margin:2px 0 0}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
 .codes-item{display:flex;align-items:center;gap:8px;margin:6px 0}
 .codes-item span{font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all;flex:1}
@@ -282,7 +287,11 @@ if(/(?:^|[?&])create(?:[=&]|$)/.test(location.search))return;
 if(localStorage.getItem('nbw_nosave')==='1')return;
 var RE=/^[A-Za-z0-9_-]{16,64}$/,seen=[],rm=[];
 try{var rr=JSON.parse(localStorage.getItem('nbw_removed'));if(rr&&rr.length)rm=rr}catch(e){}
-function add(c){c=(c||'').trim();if(RE.test(c)&&rm.indexOf(c)<0&&seen.indexOf(c)<0)seen.push(c)}
+function add(c){c=(c||'').trim();
+if(!RE.test(c)||rm.indexOf(c)>=0||seen.indexOf(c)>=0)return;
+var m=/-exp([0-9]{8})$/.exec(c);  // skip channels past their auto-remove date
+if(m&&Date.now()>=Date.UTC(+m[1].slice(0,4),+m[1].slice(4,6)-1,+m[1].slice(6,8))+864e5)return;
+seen.push(c)}
 var m=document.cookie.match(/(?:^|; )nbw_codes=([^;]*)/);
 if(m){decodeURIComponent(m[1]).split(',').forEach(add)}
 var ls=null;try{ls=JSON.parse(localStorage.getItem('nbw_saved_codes'))}catch(e){}
@@ -304,6 +313,16 @@ send and receive its messages.</p>
 <p class="muted">You get a secret channel code. Save it — it cannot be recovered.</p>
 <input id="channel-name" maxlength="80" placeholder="Channel name (optional)" autocomplete="off">
 <input id="channel-password" maxlength="128" placeholder="Send password (optional; only holders can send)" autocomplete="off">
+<label for="auto-remove">Auto-remove this channel (it deletes itself, with all messages and subscriptions):</label>
+<select id="auto-remove">
+<option value="" selected>never</option>
+<option value="1">after 1 day</option>
+<option value="7">after 1 week</option>
+<option value="30">after 1 month</option>
+<option value="365">after 1 year</option>
+<option value="custom">after a custom number of days&hellip;</option>
+</select>
+<input id="auto-remove-days" type="number" min="1" max="3650" placeholder="Number of days (1&ndash;3650)" hidden>
 <button id="create-btn">Create channel</button>
 <p class="err" id="create-error"></p>
 <div id="create-result" hidden>
@@ -312,11 +331,13 @@ send and receive its messages.</p>
 <button class="ghost" data-copy="#new-code">Copy code</button>
 <p class="save-status ok" id="create-saved" hidden>&#9989; Saved on this device &mdash; it will reappear when you return.</p>
 <p class="muted" id="create-protected" hidden>&#128274; Sending to this channel requires the send password you set. Anyone with the code can still receive.</p>
+<p class="share-ends" id="create-ends" hidden></p>
 </div>
 <div id="link-result" hidden>
 <p class="muted"><strong>Install it or share it</strong> — scan this QR with a phone camera
 (or open the link), then choose <strong>Add to Home Screen</strong>:</p>
-<div class="share-label"><div class="share-app">Join NotifyByWebApp</div></div>
+<div class="share-label"><div class="share-app">Join NotifyByWebApp</div>
+<div class="share-ends" id="link-ends" hidden></div></div>
 <div id="qr"></div>
 <div class="code-pill" id="app-url"></div>
 <div class="row">
@@ -385,7 +406,11 @@ the body, never the URL.</p>
 <ul class="muted apilist">
 <li><code>/api/message</code> &mdash; send (title &le;120, body &le;2000, optional http(s) url &le;500)</li>
 <li><code>/api/messages</code> &mdash; recent messages + subscriber count</li>
-<li><code>/api/channel</code> &mdash; create a channel (optional name)</li>
+<li><code>/api/channel</code> &mdash; create a channel (optional name, send_password,
+auto_remove_days 1&ndash;3650 &mdash; the end date is encoded into the code as
+<code>-expYYYYMMDD</code> and the channel deletes itself then)</li>
+<li><code>/api/channel/extend</code> &mdash; successor channel with a new end date
+(same name/password, messages carried over; optional notify)</li>
 <li><code>/api/subscribe</code> / <code>/api/unsubscribe</code> &mdash; register a device (used by the app)</li>
 </ul>
 </details>
@@ -402,6 +427,17 @@ __DISCLAIMER__
 'use strict';
 var CODE_RE=/^[A-Za-z0-9_-]{16,64}$/;
 var codes=[];
+// Auto-remove: a '-expYYYYMMDD' suffix inside a code marks the channel's end
+// date (end of that UTC day) — parsed locally, no server round-trip needed.
+function codeExpiry(c){
+var m=/-exp([0-9]{8})$/.exec(c||'');
+if(!m)return null;
+return Date.UTC(+m[1].slice(0,4),+m[1].slice(4,6)-1,+m[1].slice(6,8))+864e5}
+function codeExpired(c){var e=codeExpiry(c);return !!e&&Date.now()>=e}
+function expiryLabel(c){
+var m=/-exp([0-9]{8})$/.exec(c||'');
+if(!m)return null;
+return m[1].slice(0,4)+'-'+m[1].slice(4,6)+'-'+m[1].slice(6,8)}
 function $(s){return document.querySelector(s)}
 function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;
 if(text!==undefined)e.textContent=text;return e}
@@ -416,6 +452,8 @@ var list=$('#code-list');list.textContent='';
 codes.forEach(function(c){
 var item=el('div','codes-item');
 item.appendChild(el('span','',c));
+var lbl=expiryLabel(c);
+if(lbl)item.appendChild(el('span','share-ends','\\u23F3 ends '+lbl));
 var rm=el('button','danger','Remove');
 rm.addEventListener('click',function(){
 tombstone(c);
@@ -432,12 +470,22 @@ var url=location.origin+'/a#codes='+codes.map(encodeURIComponent).join(',');
 $('#app-url').textContent=url;
 $('#open-app').setAttribute('href',url);
 var ot=$('#open-app-top');if(ot)ot.setAttribute('href',url);
+// limited-lifetime channels state their end date right at the QR/link
+var ends=codes.map(expiryLabel).filter(Boolean).sort();
+var le=$('#link-ends');
+if(le){le.hidden=!ends.length;
+if(ends.length)le.textContent='\\u23F3 '+(ends.length===1&&codes.length===1
+?'This channel ends on '+ends[0]
+:(ends.length<codes.length?'Some channels end':'Channels end')+' \\u2014 earliest on '+ends[0])}
 var qr=qrcode(0,'M');qr.addData(url);qr.make();
 $('#qr').innerHTML=qr.createSvgTag({cellSize:4,margin:2,scalable:true})}
 function addCode(c){
 c=(c||'').trim();
 if(!CODE_RE.test(c)){
 $('#add-error').textContent='That does not look like a channel code (16-64 letters, digits, - or _).';
+return false}
+if(codeExpired(c)){
+$('#add-error').textContent='This channel code expired on '+expiryLabel(c)+' \\u2014 the channel removed itself.';
 return false}
 $('#add-error').textContent='';
 untombstone(c);
@@ -447,14 +495,30 @@ $('#add-code').addEventListener('click',function(){
 if(addCode($('#code-input').value))$('#code-input').value=''});
 $('#code-input').addEventListener('keydown',function(e){
 if(e.key==='Enter'&&addCode($('#code-input').value))$('#code-input').value=''});
+var arSel=$('#auto-remove'),arDays=$('#auto-remove-days');
+arSel.addEventListener('change',function(){arDays.hidden=arSel.value!=='custom'});
+function autoRemoveDays(){
+// null = never; NaN signals an invalid custom value
+if(arSel.value==='custom'){
+var n=parseInt(arDays.value,10);
+return (n>=1&&n<=3650)?n:NaN}
+return arSel.value?parseInt(arSel.value,10):null}
 $('#create-btn').addEventListener('click',function(){
-var btn=$('#create-btn');btn.disabled=true;
+var btn=$('#create-btn');
+var days=autoRemoveDays();
+if(days!==null&&isNaN(days)){
+$('#create-error').textContent='Auto-remove: enter a number of days between 1 and 3650.';return}
+btn.disabled=true;
 $('#create-error').textContent='';
-api('/api/channel',{name:$('#channel-name').value,send_password:$('#channel-password').value}).then(function(j){
+api('/api/channel',{name:$('#channel-name').value,send_password:$('#channel-password').value,
+auto_remove_days:days}).then(function(j){
 $('#new-code').textContent=j.code;
 $('#create-result').hidden=false;
 $('#create-protected').hidden=!j.send_protected;
 $('#create-saved').hidden=!autoSaveOn();
+var ce=$('#create-ends'),lbl=expiryLabel(j.code);
+if(ce){ce.hidden=!lbl;
+if(lbl)ce.textContent='\\u23F3 This channel removes itself on '+lbl+' \\u2014 the end date is part of the code.'}
 addCode(j.code);$('#send-code').value=j.code;
 $('#send-password').value=$('#channel-password').value;updateCurlCode()}).catch(function(e){
 $('#create-error').textContent='Could not create channel: '+e.message}).then(function(){
@@ -541,7 +605,10 @@ clearSaved();try{localStorage.setItem(LS_NOSAVE,'1')}catch(e){}paintSaveStatus()
 (function loadSaved(){
 var removed=lsLoadArr(LS_REMOVED),merged=[];
 (getCookie('nbw_codes')||'').split(',').concat(lsLoadArr(LS_SAVED)).forEach(function(c){
-c=(c||'').trim();if(CODE_RE.test(c)&&removed.indexOf(c)<0&&merged.indexOf(c)<0)merged.push(c)});
+c=(c||'').trim();
+if(!CODE_RE.test(c)||removed.indexOf(c)>=0||merged.indexOf(c)>=0)return;
+if(codeExpired(c)){tombstone(c);return}
+merged.push(c)});
 var added=false;
 merged.forEach(function(c){if(codes.indexOf(c)<0){codes.push(c);added=true}});
 if(added){renderCodes();updateLink()}
@@ -622,6 +689,31 @@ return j})})}
 function lsGet(k,d){try{var v=JSON.parse(localStorage.getItem(k));
 return v==null?d:v}catch(e){return d}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+// Auto-remove: a '-expYYYYMMDD' suffix inside the code marks the channel's end
+// date (end of that UTC day). Parsed locally — no server needed, works offline
+// and even after the server data is already gone.
+function codeExpiry(c){
+var m=/-exp([0-9]{8})$/.exec(c||'');
+if(!m)return null;
+return Date.UTC(+m[1].slice(0,4),+m[1].slice(4,6)-1,+m[1].slice(6,8))+864e5}
+function codeExpired(c){var e=codeExpiry(c);return !!e&&Date.now()>=e}
+function expiryLabel(c){
+var m=/-exp([0-9]{8})$/.exec(c||'');
+if(!m)return null;
+return m[1].slice(0,4)+'-'+m[1].slice(4,6)+'-'+m[1].slice(6,8)}
+function expiryDaysLeft(c){
+var e=codeExpiry(c);
+return e==null?null:Math.max(0,Math.ceil((e-Date.now())/864e5))}
+// small informational toast (no message actions)
+function noticeToast(title,body){
+var wrap=$('#toasts');if(!wrap)return;
+var t=el('div','toast');
+t.appendChild(el('div','toast-title',title));
+if(body)t.appendChild(el('div','toast-body',body));
+var x=el('button','toast-x','\\u00d7');x.setAttribute('aria-label','Dismiss');
+x.addEventListener('click',function(){t.remove()});
+t.appendChild(x);wrap.appendChild(t);
+setTimeout(function(){if(t.parentNode)t.remove()},14000)}
 // Shared "my channels" store, kept in sync with the landing page (cookie nbw_codes +
 // localStorage nbw_saved_codes) so returning visitors are routed here from / and so
 // removing a channel on either page sticks. Respects the "stop saving" opt-out.
@@ -672,14 +764,25 @@ var removedArr=lsGet(LS_REMOVED,[]);
 // landing page) UNION this page's legacy list UNION the URL fragment — so a migrating install
 // never drops a channel that lives in only one of them (e.g. one pasted in-app before the
 // stores were unified). Subtract nbw_removed so a user-removed channel is never resurrected by
-// a stale store or a stale install-URL fragment; de-dupe while preserving order.
-var stored=[],seen=[];
+// a stale store or a stale install-URL fragment; de-dupe while preserving order. A code whose
+// auto-remove date has passed is tombstoned like a user removal (the server data is already
+// gone via the storage TTL) and announced once.
+var stored=[],seen=[],expired=[];
 function take(c){c=(c||'').trim();
-if(CODE_RE.test(c)&&removedArr.indexOf(c)<0&&seen.indexOf(c)<0){seen.push(c);stored.push(c)}}
+if(!CODE_RE.test(c)||removedArr.indexOf(c)>=0||seen.indexOf(c)>=0)return;
+seen.push(c);
+if(codeExpired(c)){expired.push(c);return}
+stored.push(c)}
 readSavedStore().forEach(take);
 lsGet(LS_CODES,[]).forEach(take);
 parseFragmentCodes().forEach(take);
 codes=stored;
+if(expired.length){
+expired.forEach(function(c){if(removedArr.indexOf(c)<0)removedArr.push(c)});
+lsSet(LS_REMOVED,removedArr);
+noticeToast('Channel'+(expired.length>1?'s':'')+' expired',
+expired.map(function(c){return 'Ended on '+expiryLabel(c)}).join(', ')+
+' \\u2014 removed from this device (auto-remove date reached).')}
 lsSet(LS_CODES,codes);mirrorSavedStore()}
 
 // ------- install identity: data:-URI manifest keeps codes in start_url
@@ -917,6 +1020,11 @@ var card=el('div','card channel');card.setAttribute('data-code',code);
 card.appendChild(el('h2','','\\u2026'));
 card.appendChild(el('div','muted stats',''));
 card.appendChild(el('div','channel-latest',''));
+var endLabel=expiryLabel(code);
+if(endLabel){
+var dl=expiryDaysLeft(code);
+card.appendChild(el('div','expiry'+(dl<=7?' expiry-soon':''),
+'\\u23F3 Auto-removes on '+endLabel+' ('+(dl<=1?'last day!':dl+' days left')+')'))}
 card.appendChild(el('div','msgs'));
 // always-visible shareable QR for this channel
 var share=el('div','share');
@@ -924,6 +1032,9 @@ var shareUrl=location.origin+'/a#codes='+encodeURIComponent(code);
 var slabel=el('div','share-label');
 slabel.appendChild(el('div','share-app','Join NotifyByWebApp'));
 slabel.appendChild(el('div','share-channel','for Channel: \\u2026'));
+// limited-lifetime channels state their end date right at the QR, so a
+// screenshot / printout of the QR carries the warning too
+if(endLabel)slabel.appendChild(el('div','share-ends','\\u23F3 Ends on '+endLabel));
 share.appendChild(slabel);
 var qrbox=el('div','qrshare');
 try{var qr=qrcode(0,'M');qr.addData(shareUrl);qr.make();
@@ -959,6 +1070,51 @@ serr.textContent=(e&&e.status===403)?'This channel requires a valid send passwor
 .then(function(){se.disabled=false})});
 d.appendChild(ti);d.appendChild(bo);d.appendChild(ur);d.appendChild(pw);d.appendChild(se);d.appendChild(serr);
 card.appendChild(d);
+if(endLabel){
+// The end date is baked into the (hashed) code, so it cannot be changed in
+// place: extending creates a SUCCESSOR channel (new code + QR) that inherits
+// the name, send password and all current messages. Subscribers re-subscribe
+// via the new QR — or with one tap on the optional migration notification.
+var ext=document.createElement('details');ext.className='extend-details';
+ext.appendChild(el('summary','','\\u23F3 Extend / change the end date'));
+ext.appendChild(el('p','muted','Creates a NEW channel (new code + QR) with the same name and all current messages. '
++'Everyone must re-subscribe via the new QR/link \\u2014 the old channel still ends on '+endLabel+'.'));
+var esel=document.createElement('select');esel.className='extend-days';
+[['','no end date (never)'],['1','1 day from now'],['7','1 week from now'],
+['30','1 month from now'],['365','1 year from now'],['custom','custom number of days\\u2026']]
+.forEach(function(o){var op=document.createElement('option');
+op.value=o[0];op.textContent=o[1];esel.appendChild(op)});
+var ecust=el('input','extend-custom');ecust.type='number';ecust.min='1';ecust.max='3650';
+ecust.placeholder='Number of days';ecust.hidden=true;
+esel.addEventListener('change',function(){ecust.hidden=esel.value!=='custom'});
+var enot=document.createElement('label');enot.className='muted extend-notify';
+var echk=document.createElement('input');echk.type='checkbox';echk.checked=true;
+enot.appendChild(echk);
+enot.appendChild(document.createTextNode(' Notify subscribers now so they can switch with one tap (recommended)'));
+var ego=el('button','','Create extended channel');
+var eerr=el('div','muted extend-status');
+ego.addEventListener('click',function(){
+var days=null;
+if(esel.value==='custom'){
+days=parseInt(ecust.value,10);
+if(!days||days<1||days>3650){eerr.textContent='Enter 1\\u20133650 days.';return}}
+else if(esel.value)days=parseInt(esel.value,10);
+ego.disabled=true;eerr.textContent='Creating the extended channel\\u2026';
+api('/api/channel/extend',{code:code,auto_remove_days:days,notify:echk.checked,
+send_password:deletePw(card)})
+.then(function(j){
+addChannel(j.code);
+removeChannel(code);
+noticeToast('Channel extended',
+'Share the NEW QR code / link'+(j.expires?' \\u2014 the new channel ends on '+expiryLabel(j.code):' \\u2014 the new channel has no end date')+'. '
++j.messages_copied+' message(s) were carried over; the old channel still stops on '+endLabel+'.')})
+.catch(function(e){
+eerr.textContent=(e&&e.status===403)?'This channel requires a valid send password.'
+:('Could not extend: '+(e.message||'error'));
+ego.disabled=false})});
+ext.appendChild(esel);ext.appendChild(ecust);ext.appendChild(enot);
+ext.appendChild(ego);ext.appendChild(eerr);
+card.appendChild(ext)}
 var row=el('div','row');
 var mute=el('button','ghost mute-btn','');
 function paintMute(){var m=isMuted(code);
@@ -1148,6 +1304,8 @@ renderChannels();injectManifest();mirrorStateForSW()}
 $('#add-btn').addEventListener('click',function(){
 var v=$('#add-input').value.trim();
 if(!CODE_RE.test(v)){$('#add-error').textContent='Invalid code format.';return}
+if(codeExpired(v)){
+$('#add-error').textContent='This channel code expired on '+expiryLabel(v)+' \\u2014 it was removed automatically.';return}
 $('#add-error').textContent='';$('#add-input').value='';
 addChannel(v)});
 $('#enable-btn').addEventListener('click',function(){
@@ -1218,6 +1376,23 @@ var a=new Uint8Array(b.length);
 for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);
 return a}
 
+// auto-remove: a '-expYYYYMMDD' code suffix marks the end of that UTC day
+function swCodeExpired(code){
+var m=/-exp([0-9]{8})$/.exec(code||'');
+if(!m)return false;
+var t=Date.UTC(+m[1].slice(0,4),+m[1].slice(4,6)-1,+m[1].slice(6,8))+864e5;
+return Date.now()>=t}
+function dropExpiredFromMirror(){
+return caches.open('nbw-state').then(function(c){
+return c.match('/__nbw_state').then(function(r){return r?r.json():null})
+.then(function(st){
+if(!st||!st.codes)return;
+var live=st.codes.filter(function(x){return !swCodeExpired(x)});
+if(live.length===st.codes.length)return;
+st.codes=live;
+return c.put('/__nbw_state',new Response(JSON.stringify(st),
+{headers:{'Content-Type':'application/json'}}))})}).catch(function(){})}
+
 self.addEventListener('install',function(e){
 e.waitUntil(caches.open(CACHE).then(function(c){return c.addAll(SHELL)})
 .then(function(){return self.skipWaiting()}))});
@@ -1244,6 +1419,22 @@ return r||fetch(e.request)}))}});
 self.addEventListener('push',function(e){
 var d={};
 try{d=e.data?e.data.json():{}}catch(err){d={body:e.data?e.data.text():''}}
+// A push delivered late, AFTER the channel's auto-remove date (sent while it
+// was still alive; ttl=86400 lets it arrive up to a day later): do not show
+// the expired message. userVisibleOnly requires SOME notification, so show a
+// one-time "expired" notice instead, and drop the channel from the SW's state
+// mirror; open tabs tombstone it via the refresh ping / next load.
+if(d.exp&&Date.now()>=d.exp*1000){
+e.waitUntil(Promise.all([
+self.registration.showNotification(
+'Channel expired'+(d.channel?' \\u2014 '+d.channel:''),{
+body:'This channel reached its auto-remove date and was removed.',
+icon:'/icon-192.png',badge:'/badge.png',tag:d.tag||'nbw-expired',
+data:{url:'/a'}}),
+dropExpiredFromMirror(),
+self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){
+cs.forEach(function(c){c.postMessage({type:'nbw-refresh'})})})]));
+return}
 var title=d.title||'Notify';
 if(d.channel)title=title+' \\u2014 '+d.channel;
 var nbody=d.body||'';
@@ -1288,7 +1479,8 @@ e.waitUntil(caches.open('nbw-state').then(function(c){return c.match('/__nbw_sta
 .then(function(r){return r?r.json():null}).then(function(st){
 if(!st||!st.key||!st.codes||!st.codes.length)return;
 var muted=st.muted||[];
-var active=st.codes.filter(function(code){return muted.indexOf(code)<0});
+var active=st.codes.filter(function(code){
+return muted.indexOf(code)<0&&!swCodeExpired(code)});
 return self.registration.pushManager.subscribe({userVisibleOnly:true,
 applicationServerKey:urlB64ToU8SW(st.key)}).then(function(sub){
 var body=sub.toJSON();

@@ -518,6 +518,93 @@ def test_app_page_enable_prompt_stays_on_top_until_enabled(server, page, channel
     assert "system notification" in why and "closed" in why
 
 
+def test_landing_create_with_auto_remove(server, page):
+    page.goto(server.base + "/?create")
+    page.fill("#channel-name", "Timed")
+    page.select_option("#auto-remove", "7")
+    page.click("#create-btn")
+    page.wait_for_selector("#create-result:not([hidden])")
+    code = page.text_content("#new-code").strip()
+    assert re.search(r"-exp\d{8}$", code)  # the end date rides inside the code
+    # the end date is stated at the create result, at the QR/link, and per code
+    assert page.is_visible("#create-ends")
+    assert "removes itself on" in page.text_content("#create-ends")
+    page.wait_for_selector("#link-ends:not([hidden])")
+    assert "ends on" in page.text_content("#link-ends").lower()
+    assert "ends" in page.text_content("#code-list").lower()
+    # invalid custom day count is rejected client-side
+    page.select_option("#auto-remove", "custom")
+    page.fill("#auto-remove-days", "0")
+    page.click("#create-btn")
+    assert "between 1 and 3650" in page.text_content("#create-error")
+
+
+def test_app_page_expiry_badge_and_extend_flow(server, page):
+    code = server.post("/api/channel", {"name": "Ending", "auto_remove_days": 30}).json[
+        "code"
+    ]
+    server.post("/api/message", {"code": code, "title": "carry me"})
+    page.goto(server.base + "/a#codes=" + code)
+    page.wait_for_selector(".channel .expiry")
+    assert "Auto-removes on" in page.text_content(".channel .expiry")
+    # the share QR block itself carries the end date (screenshots keep it)
+    assert "Ends on" in page.text_content(".channel .share-ends")
+
+    # extend: creates a successor with the same message; the old card goes away
+    page.click(".channel .extend-details summary")
+    page.select_option(".channel .extend-days", "365")
+    page.click(".channel .extend-details button")
+    page.wait_for_selector(
+        '.channel[data-code="' + code + '"]', state="detached", timeout=8000
+    )
+    page.wait_for_selector(".channel .msg-title:has-text('carry me')")
+    new_code = page.get_attribute(".channel", "data-code")
+    assert new_code != code and re.search(r"-exp\d{8}$", new_code)
+    # the old code is tombstoned on this device; a toast explains the switch
+    removed = page.evaluate("JSON.parse(localStorage.getItem('nbw_removed')||'[]')")
+    assert code in removed
+    assert page.locator("#toasts .toast", has_text="Channel extended").count() >= 1
+
+
+def test_app_page_expired_code_is_tombstoned_with_notice(server, page):
+    expired = "expiredchannelcode0123456789-exp20200101"
+    page.goto(server.base + "/a#codes=" + expired)
+    page.wait_for_selector("#empty-hint:not([hidden])")
+    assert page.query_selector(".channel") is None
+    page.wait_for_selector("#toasts .toast:has-text('expired')")
+    removed = page.evaluate("JSON.parse(localStorage.getItem('nbw_removed')||'[]')")
+    assert expired in removed
+    # pasting an expired code is rejected with its end date
+    page.fill("#add-input", expired)
+    page.click("#add-btn")
+    assert "2020-01-01" in page.text_content("#add-error")
+
+
+def test_landing_redirect_skips_expired_codes(server, page):
+    live = server.post("/api/channel", {"name": "Live"}).json["code"]
+    expired = "expiredchannelcode0123456789-exp20200101"
+    page.goto(server.base + "/?create")
+    page.evaluate(
+        "(cs)=>localStorage.setItem('nbw_saved_codes',JSON.stringify(cs))",
+        [expired, live],
+    )
+    # an expired code is left out of the returning-visitor redirect fragment
+    page.goto(server.base + "/", wait_until="commit")
+    page.wait_for_url("**/a#codes=*", timeout=15000)
+    assert live in page.url and expired not in page.url
+    # when ONLY (not-yet-tombstoned) expired codes remain, no redirect happens
+    page.goto(server.base + "/?create")
+    page.evaluate(
+        "localStorage.setItem('nbw_saved_codes',"
+        "JSON.stringify(['expiredchannelcodeB23456789-exp20190101']));"
+        "localStorage.removeItem('nbw_codes');"
+    )
+    page.context.clear_cookies()  # after the load — the page re-heals the cookie
+    page.goto(server.base + "/", wait_until="commit")
+    page.wait_for_selector("#create-btn")
+    assert "/a" not in page.url
+
+
 def test_unknown_code_shows_friendly_error(server, page):
     page.goto(server.base + "/a#codes=this_code_does_not_exist_123456")
     page.wait_for_selector(".channel h2:has-text('Unknown channel')")

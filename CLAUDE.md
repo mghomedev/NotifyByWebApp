@@ -27,6 +27,27 @@ and in README.md; keep all three in sync.
   platform request logs) and in the app URL **fragment** (never sent to servers).
 - Possession of the code ⇒ may subscribe AND send (deliberate; a separate subscribe-only
   key remains a possible future option).
+- **Auto-remove (optional)**: a channel may be created with an end date — never (default),
+  1 day / 1 week / 1 month / 1 year, or custom days (`auto_remove_days`, 1–3650, on
+  `/api/channel`). The date is encoded INTO the code as a **`-expYYYYMMDD` suffix** (end of
+  that UTC day; still matches the unchanged CODE_RE → no format migration, old clients
+  accept the codes). Because channels are addressed by `sha256(code)`, the suffix is
+  **tamper-proof**: editing it addresses a different, non-existent channel — which also
+  makes the date **immutable by design**. Deletion needs no cron: every storage TTL is
+  capped at the end date (`_ttl_for`), so Redis deletes meta/subs/msgs by itself;
+  `_live_meta` additionally treats an expired channel as unknown (404) on every read/write
+  path (covers MemoryStorage and clock lag). Clients parse the suffix **locally**
+  (`codeExpiry`/`expiryLabel` in both pages, `swCodeExpired` in the SW) — works offline and
+  after the server data is already gone.
+- **Extending** = `/api/channel/extend` (old `code` + new `auto_remove_days` +
+  `send_password` if the channel is protected; same creation soft cap): creates a
+  **successor channel** — new code/QR — inheriting the name, the send-password hash and all
+  stored messages (`seed_messages`, order + timestamps preserved). The old channel runs
+  unchanged until its own date. With `notify: true` (default) one final migration message
+  is pushed to the old channel; the **new code travels ONLY in the encrypted push payload**
+  (`push_url` override → a relative `/a#codes=…` fragment link for one-tap switching),
+  NEVER in stored data — storage still never holds a raw code. On the extender's device the
+  app replaces the old card with the successor (old code tombstoned).
 - **Subscriber** = Web Push subscription (endpoint + p256dh/auth keys), stored per channel
   keyed by `sha256(endpoint)`. One push subscription per install; server maps
   channel → endpoints.
@@ -89,7 +110,11 @@ last. Both pages also carry a shared no-warranty / free-open-source **disclaimer
    `loadCodes()` builds its active set as the **union** of the shared saved store
    (`readSavedStore()`), this page's legacy `nbw_codes` list, and the fragment, then subtracts
    `nbw_removed` — so a channel that lives in only one store (e.g. one pasted in-app before the
-   stores were unified) is never dropped, and a removed one is never resurrected.
+   stores were unified) is never dropped, and a removed one is never resurrected. Codes past
+   their **auto-remove date** are tombstoned here too (one-time toast); the `/` → `/a`
+   redirect skips them, pasting one is rejected with its end date, and every QR/link
+   display (channel card share block, landing create result + `#link-ends` + code list)
+   states "⏳ Ends on YYYY-MM-DD" so screenshots of a QR carry the warning.
 4. Final fallback (matters on iOS, where the installed app has separate storage): in-app
    “Add a channel” by pasting a code.
 5. Per-device **mute** (`nbw_muted`): each channel card has a 🔔/🔕 Mute toggle. Muting
@@ -123,7 +148,11 @@ Users trust that saved channels persist locally; losing that state loses their c
   preserves existing data; never clear them implicitly; keep this code stable across
   releases. Treat it as load-bearing user data.
 - Removal is **user-initiated only**: the per-channel **Remove** button, **Forget saved
-  channels**, or the user clearing their browser cookies/site data.
+  channels**, or the user clearing their browser cookies/site data — plus ONE documented
+  exception: a channel whose **auto-remove date** (chosen by its creator at creation,
+  encoded in the code's `-expYYYYMMDD` suffix) has passed is tombstoned automatically with
+  a one-time notice; the server data has already deleted itself by then, so keeping the
+  code would only ever produce "unknown channel".
 - Fragility to design around (why localStorage was added alongside the cookie): browsers cap
   JS-set (`document.cookie`) cookies — Safari ITP limits them to ~7 days regardless of the
   1-year expiry — so localStorage is the durable copy and the cookie is secondary. The
@@ -138,8 +167,9 @@ Users trust that saved channels persist locally; losing that state loses their c
   `/apple-touch-icon.png` (+ `-precomposed` alias) `/favicon.ico` `/robots.txt`
   `/google<token>.html` (Search
   Console verification) `/api/health` `/api/status`.
-  POST (JSON, code in body): `/api/channel` `/api/subscribe` `/api/unsubscribe`
-  `/api/message` `/api/message/delete` (by `id`) `/api/messages` `/api/messages/clear`.
+  POST (JSON, code in body): `/api/channel` `/api/channel/extend` `/api/subscribe`
+  `/api/unsubscribe` `/api/message` `/api/message/delete` (by `id`) `/api/messages`
+  `/api/messages/clear`.
   OPTIONS: CORS preflight for `/api/*`.
 - `notify_core.py` — codes/hashing, validation, rate limiter, storage backends, push.
 - `notify_pages.py` — landing + app HTML/JS, service worker, CSP, icon SVG, robots.
@@ -226,7 +256,11 @@ Users trust that saved channels persist locally; losing that state loses their c
   `notificationclick` → prefer an existing `/a` client, else open, cross-origin
   message links open in a new window (don’t destroy the app tab); `pushsubscriptionchange`
   → re-subscribe + re-POST `/api/subscribe` for the codes mirrored into a Cache entry
-  (`/__nbw_state`, SWs can’t read localStorage); tiny app-shell cache network-first.
+  (`/__nbw_state`, SWs can’t read localStorage), **skipping expired codes**; tiny app-shell
+  cache network-first. A push that arrives AFTER its channel's auto-remove date (payload
+  `exp`, sent while the channel was alive, delivered up to `ttl=86400` late) does NOT show
+  the message: the SW shows a one-time **"Channel expired"** notice instead
+  (`userVisibleOnly` requires some notification) and drops the code from `/__nbw_state`.
 - **Live app-page updates (works with notifications OFF — required)**: `/a` polls every
   channel via `/api/messages` every `POLL_MS`=12s while the tab is visible (guarded by
   `visibilitychange`; overridable in tests via `window.__NBW_POLL_MS`), plus an instant
@@ -280,16 +314,22 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 191 tests
+## Tests (pytest; must be green before every deploy) — 207 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends
-  (RedisStorage against captured command pipelines), UTF-8 truncation.
+  (RedisStorage against captured command pipelines), UTF-8 truncation, and auto-remove:
+  suffix round-trip + invalid-suffix = never, `auto_remove_days` validation, tampered
+  suffix = different hash → unknown, storage TTL capped at the end date, expired channel
+  gone on every path (patched clock), extend copies meta/messages/protection with the
+  migration push carrying the new code ONLY in the payload (never in storage).
 - `tests/test_api.py` — integration: the real handler on a local port, in-memory storage,
   monkeypatched `webpush` capture; happy path + error/cap/prune/rate-limit + channel-create
   soft cap + oversized-body drain + CSP directive + StorageError→502 + security headers +
   the no-logging guarantee + static assets (incl. `/badge.png` served with an alpha channel
-  so the Android notification icon is not a white square, and the `/icon.svg` amber accent).
+  so the Android notification icon is not a white square, and the `/icon.svg` amber accent)
+  + auto-remove (`auto_remove_days` on create incl. 400s, `expires` in create/snapshot
+  responses, `/api/channel/extend` round-trip, expired channel → 404 everywhere).
 - `tests/test_storage_http.py` — the real `RedisStorage` HTTP layer against a fake Upstash
   REST server (request shape, Bearer auth, `/pipeline`, per-command error, non-JSON, refused
   connection → `StorageError`).
@@ -306,13 +346,20 @@ Users trust that saved channels persist locally; losing that state loses their c
   **`/` → `/a` returning-visitor redirect** (with `/?create` escape hatch + `nbw_nosave`
   suppression), the **shared-store union** (a channel in only the legacy list OR only the
   cross-page store still renders on `/a`), the **shared tombstone** (a channel removed on
-  the generator is not resurrected on `/a` by a stale fragment), and the **title/body
-  display de-dup** (a body-only message renders once in the list + toast, never "Hi / Hi").
+  the generator is not resurrected on `/a` by a stale fragment), the **title/body
+  display de-dup** (a body-only message renders once in the list + toast, never "Hi / Hi"),
+  and **auto-remove**: create with an end date (suffixed code + "ends on" at the create
+  result / QR / code list + custom-days validation), the channel-card expiry badge +
+  share-block "Ends on", the extend flow (successor card carries the messages, old code
+  tombstoned, toast), an expired fragment code tombstoned with a notice + rejected on
+  paste, and the `/` redirect skipping expired codes.
 - `tests/test_ui_notifications.py` + `tests/uikit.py` — **HEADED** Chromium (headless denies
   notification permission): delivers a real push into the SW via CDP
   `ServiceWorker.deliverPushMessage` and asserts the displayed notification’s
   title/body/tag/click-url/**badge** (incl. the title==body de-dup → empty notification body,
-  and `badge` = `/badge.png` so the Android status-bar icon isn’t a white square);
+  and `badge` = `/badge.png` so the Android status-bar icon isn’t a white square), plus the
+  **expired-push replacement** (past `exp` → "Channel expired" notice, never the message
+  content; future `exp` → shown normally);
   incl. a Pixel device-emulation run (Android = Chrome).
 - `tests/test_ui_platforms.py` — iOS Safari-tab emulation (Push APIs stripped → install
   banner, enable hidden), iOS installed-standalone emulation (fake push stack → subscribe

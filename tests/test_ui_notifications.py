@@ -106,6 +106,42 @@ def test_multiple_pushes_show_as_distinct_notifications(notif_page):
     assert titles == ["First", "Second"]
 
 
+def test_expired_push_shows_replacement_not_the_message(notif_page):
+    # A push delivered AFTER the channel's auto-remove date (sent while it was
+    # alive, delivered late): the message content must NOT be shown. Instead a
+    # one-time "Channel expired" notice appears (userVisibleOnly requires some
+    # notification), telling the user why the channel vanishes.
+    page, base, channel = notif_page
+    deliver_push(
+        page,
+        base,
+        {
+            "title": "Secret late content",
+            "body": "should never be displayed",
+            "channel": "Old Channel",
+            "exp": 1000,  # long in the past
+            "tag": "t-exp",
+        },
+    )
+    notes = wait_for_notification(page)
+    assert len(notes) == 1
+    assert "Channel expired" in notes[0]["title"]
+    assert "Old Channel" in notes[0]["title"]
+    assert "auto-remove" in notes[0]["body"]
+    assert all("Secret late content" not in (n["title"] + n["body"]) for n in notes)
+
+    # a future end date shows the message normally
+    deliver_push(
+        page, base, {"title": "Still alive", "exp": 4102444800, "tag": "t-live"}
+    )
+    for _ in range(50):
+        notes = wait_for_notification(page)
+        if any(n["title"] == "Still alive" for n in notes):
+            break
+        page.wait_for_timeout(100)
+    assert any(n["title"] == "Still alive" for n in notes)
+
+
 def test_malformed_push_still_shows_a_notification(notif_page):
     # Chrome requires a visible notification for every push (userVisibleOnly);
     # our SW must cope with a non-JSON payload and still show something.

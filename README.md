@@ -38,6 +38,15 @@ the server.
 - **Delete messages** — one at a time, all at once, or just the older ones (the newest 3
   stay; older ones fold into a "More…" expander).
 - **Optional send-password** per channel (only holders of the password can send).
+- **Self-removing channels** — optionally pick an end date when creating (1 day / 1 week /
+  1 month / 1 year / custom days). The date is encoded into the channel code itself
+  (`…-expYYYYMMDD`), every QR / link / channel card clearly shows **"⏳ Ends on DATE"**, and
+  on that day the channel deletes itself everywhere — messages, subscriptions and the
+  entry on your devices (you get a short notice). The date cannot be forged or changed:
+  to **extend**, the app creates a *successor* channel (new code + QR) carrying over the
+  name, send-password and all messages, and can notify current subscribers with a one-tap
+  "switch to the new channel" notification. A notification that arrives late, after the
+  end date, is replaced by a "Channel expired" notice instead of showing stale content.
 - Channels are **sorted by latest activity**, with local-time timestamps, newest on top.
 - Your channels are **saved automatically** on your device (see below).
 
@@ -51,6 +60,14 @@ curl -X POST https://YOUR-DEPLOYMENT/api/channel \
   -H "Content-Type: application/json" \
   -d '{"name":"Build alerts"}'
 # optional: {"name":"Event","send_password":"only-managers"} → sending needs the password
+# optional: {"name":"Party","auto_remove_days":30} → the channel deletes itself after 30
+#   days; the end date is encoded in the returned code as "…-expYYYYMMDD"
+
+# extend a self-removing channel: creates a SUCCESSOR channel (new code) with the same
+# name/password and all messages; optionally notifies subscribers to switch (default true)
+curl -X POST https://YOUR-DEPLOYMENT/api/channel/extend \
+  -H "Content-Type: application/json" \
+  -d '{"code":"OLD_CODE","auto_remove_days":365,"notify":true}'
 
 # send a message (this is the third-party integration endpoint)
 curl -X POST https://YOUR-DEPLOYMENT/api/message \
@@ -72,8 +89,9 @@ curl -X POST https://YOUR-DEPLOYMENT/api/messages/clear \
 
 `/api/subscribe` and `/api/unsubscribe` (push subscription per device) are normally handled
 by the app itself. Limits: title ≤ 120 chars, body ≤ 2000, optional http(s) url ≤ 500,
-send-password 4–128 chars, rate limit 120 requests/min/IP, ≤ 200 subscribed devices per
-channel, newest 50 messages kept, channels expire after 400 days of inactivity.
+send-password 4–128 chars, auto-remove 1–3650 days, rate limit 120 requests/min/IP, ≤ 200
+subscribed devices per channel, newest 50 messages kept, channels expire after 400 days of
+inactivity (or on their auto-remove date, whichever comes first).
 
 ## Supported devices (minimum versions)
 
@@ -126,7 +144,7 @@ only in local `.env` files (gitignored) and Vercel environment variables.
 python -m venv .venv && . .venv/Scripts/activate   # .venv/bin/activate on Linux/macOS
 pip install -r requirements-dev.txt
 python -m playwright install chromium              # once, for the browser UI tests
-python -m pytest                                   # 191 tests, fully offline
+python -m pytest                                   # 207 tests, fully offline
 ```
 
 Tests include real-crypto Web Push (a fake device decrypts the actual payload) and browser

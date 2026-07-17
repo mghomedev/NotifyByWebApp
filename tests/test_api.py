@@ -592,3 +592,67 @@ def test_no_request_logging(server, channel, capfd):
     assert "SECRET_MARKER" not in out + err
     assert "GET /" not in out + err
     assert "POST /" not in out + err
+
+
+# ---------------------------------------------------------- auto-remove
+
+
+def test_create_channel_with_auto_remove_days(server):
+    resp = server.post("/api/channel", {"name": "Timed", "auto_remove_days": 7})
+    assert resp.status == 200
+    code = resp.json["code"]
+    assert core.code_expiry(code) == resp.json["expires"]
+    snap = server.post("/api/messages", {"code": code})
+    assert snap.json["channel"]["expires"] == resp.json["expires"]
+    # default stays exactly as before: no suffix, no expiry
+    plain = server.post("/api/channel", {"name": "Forever"}).json
+    assert plain["expires"] is None and core.code_expiry(plain["code"]) is None
+    for bad in ("soon", -1, 99999, 1.5):
+        assert server.post("/api/channel", {"auto_remove_days": bad}).status == 400
+
+
+def test_extend_channel_endpoint(server, push_calls):
+    old = server.post("/api/channel", {"name": "Evt", "auto_remove_days": 2}).json
+    server.post("/api/message", {"code": old["code"], "title": "keep"})
+    server.post(
+        "/api/subscribe", {"code": old["code"], "subscription": fake_subscription(9)}
+    )
+    resp = server.post(
+        "/api/channel/extend", {"code": old["code"], "auto_remove_days": 30}
+    )
+    assert resp.status == 200
+    new = resp.json
+    assert new["code"] != old["code"] and new["messages_copied"] == 1
+    assert new["expires"] == core.code_expiry(new["code"])
+    # successor carries the message; the old channel gets the migration notice
+    snap_new = server.post("/api/messages", {"code": new["code"]}).json
+    assert [m["title"] for m in snap_new["messages"]] == ["keep"]
+    snap_old = server.post("/api/messages", {"code": old["code"]}).json
+    assert snap_old["messages"][0]["title"].startswith("Channel extended")
+    # the successor's raw code is never in stored data — push payload only
+    assert new["code"] not in json.dumps(snap_old)
+    assert push_calls[-1]["payload"]["url"] == "/a#codes=" + new["code"]
+    assert new["notified"] == 1
+    # unknown old code → 404
+    ghost = server.post("/api/channel/extend", {"code": core.generate_code()})
+    assert ghost.status == 404
+
+
+def test_expired_channel_is_404_everywhere(server, monkeypatch):
+    import time as _time
+
+    code = server.post("/api/channel", {"name": "Brief", "auto_remove_days": 1}).json[
+        "code"
+    ]
+    assert server.post("/api/messages", {"code": code}).status == 200
+    real = _time.time
+    monkeypatch.setattr(_time, "time", lambda: real() + 3 * 86400)
+    assert server.post("/api/messages", {"code": code}).status == 404
+    assert server.post("/api/message", {"code": code, "title": "t"}).status == 404
+    assert (
+        server.post(
+            "/api/subscribe", {"code": code, "subscription": fake_subscription(2)}
+        ).status
+        == 404
+    )
+    assert server.post("/api/channel/extend", {"code": code}).status == 404

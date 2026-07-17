@@ -507,3 +507,139 @@ def test_delete_requires_password_on_protected_channel(env):
     with pytest.raises(core.SendForbidden):
         core.clear_messages(code)
     assert core.delete_message(code, mid, "phrase-key") is True
+
+
+# ---------------------------------------------------------- auto-remove
+
+
+def test_expiry_suffix_roundtrip_and_code_format_unchanged():
+    code = core.generate_code() + core.expiry_suffix(7)
+    assert core.valid_code(code)  # still matches the unchanged CODE_RE
+    assert core.CODE_EXP_RE.search(code)
+    exp = core.code_expiry(code)
+    # end of the UTC day 7 days out: strictly more than 6, at most 8 days away
+    assert time.time() + 6 * 86400 < exp <= time.time() + 8 * 86400 + 1
+    assert core.expiry_suffix(None) == "" and core.expiry_suffix(0) == ""
+
+
+def test_code_expiry_none_for_missing_or_invalid_suffix():
+    assert core.code_expiry(core.generate_code()) is None
+    assert core.code_expiry("") is None
+    # an impossible date is NOT an expiry marker (treated as never)
+    assert core.code_expiry("aaaaaaaaaaaaaaaa-exp99999999") is None
+
+
+def test_validate_auto_remove_days():
+    assert core.validate_auto_remove_days(None) is None
+    assert core.validate_auto_remove_days(0) is None
+    assert core.validate_auto_remove_days("") is None
+    assert core.validate_auto_remove_days(1) == 1
+    assert core.validate_auto_remove_days(3650) == 3650
+    for bad in (True, "7", 1.5, -1, 3651):
+        with pytest.raises(ValueError):
+            core.validate_auto_remove_days(bad)
+
+
+def test_create_channel_with_auto_remove_and_tampered_suffix(env):
+    res = core.create_channel("Timed", auto_remove_days=7)
+    assert res["expires"] == core.code_expiry(res["code"])
+    snap = core.channel_snapshot(res["code"], 5)
+    assert snap["channel"]["expires"] == res["expires"]
+    # the date is part of the hashed code: rewriting the suffix addresses a
+    # different (non-existent) channel, so the end date cannot be forged
+    tampered = res["code"][:-8] + "29991231"
+    assert core.code_hash(tampered) != core.code_hash(res["code"])
+    assert core.channel_snapshot(tampered, 5) is None
+    # a channel without auto-remove stays exactly as before
+    forever = core.create_channel("Forever")
+    assert forever["expires"] is None
+    assert core.code_expiry(forever["code"]) is None
+
+
+def test_storage_ttl_never_extends_past_the_expiry_date():
+    class _FakeRedisTTL(core.RedisStorage):
+        def __init__(self):
+            super().__init__("https://fake.example.invalid", "token")
+            self.calls = []
+
+        def _pipeline(self, commands):
+            self.calls.append(commands)
+            return [["OK"]][0] if commands[0][0] == "SET" else [1, "OK", 1]
+
+    st = _FakeRedisTTL()
+    exp = core.code_expiry("x" * 20 + core.expiry_suffix(1))
+    st.create_channel("kh", "{}", core._ttl_for(exp))
+    cmd = st.calls[0][0]
+    ex = int(cmd[cmd.index("EX") + 1])
+    assert 0 < ex <= 2 * 86400  # capped at the end date, not the 400-day window
+    # without an end date the normal inactivity window applies
+    assert core._ttl_for(None) == core.channel_ttl_seconds()
+
+
+def test_expired_channel_is_gone_everywhere(env, monkeypatch):
+    from conftest import fake_subscription
+
+    res = core.create_channel("Short", auto_remove_days=1)
+    code = res["code"]
+    assert core.channel_snapshot(code, 5) is not None
+    real = time.time
+    monkeypatch.setattr(core.time, "time", lambda: real() + 3 * 86400)
+    assert core.channel_snapshot(code, 5) is None
+    assert core.publish(code, {"title": "x", "body": "", "url": ""}) is None
+    assert core.subscribe(code, fake_subscription(1)) is None
+    assert core.unsubscribe(code, "https://push.example.invalid/x") is None
+    assert core.extend_channel(code, 5) is None
+
+
+def test_extend_channel_copies_meta_and_messages(env, push_calls):
+    from conftest import fake_subscription
+
+    old = core.create_channel("Party", send_password="gate-pass", auto_remove_days=2)
+    for i in range(3):
+        core.publish(
+            old["code"],
+            core.validate_message({"title": f"m{i}"}),
+            "gate-pass",
+        )
+    core.subscribe(old["code"], fake_subscription(1))
+
+    with pytest.raises(core.SendForbidden):
+        core.extend_channel(old["code"], 30, "wrong-pass")
+
+    res = core.extend_channel(old["code"], 30, "gate-pass", notify=True)
+    assert res["code"] != old["code"]
+    assert res["expires"] == core.code_expiry(res["code"])
+    assert res["expires"] > old["expires"]
+    assert res["messages_copied"] == 3
+    assert res["notified"] == 1  # the one subscribed device got the notice
+
+    # successor: same name, same protection, the messages in the same order,
+    # and NO migration notice of its own
+    snap_new = core.channel_snapshot(res["code"], 10)
+    assert snap_new["channel"]["name"] == "Party"
+    assert snap_new["channel"]["send_protected"] is True
+    assert [m["title"] for m in snap_new["messages"]] == ["m2", "m1", "m0"]
+    with pytest.raises(core.SendForbidden):
+        core.publish(res["code"], core.validate_message({"title": "no pw"}))
+
+    # old channel: untouched except the migration notice on top — and the
+    # successor's raw code is NEVER written to storage (only the encrypted
+    # push payload carries it, as a fragment URL)
+    snap_old = core.channel_snapshot(old["code"], 10)
+    assert snap_old["messages"][0]["title"].startswith("Channel extended")
+    assert res["code"] not in json.dumps(snap_old)
+    mig = push_calls[-1]["payload"]
+    assert mig["url"] == "/a#codes=" + res["code"]
+    assert mig["exp"] == old["expires"]  # SW suppresses it after the old end date
+
+
+def test_extend_channel_without_notify_leaves_old_messages_alone(env, push_calls):
+    old = core.create_channel("Quiet", auto_remove_days=2)
+    core.publish(old["code"], core.validate_message({"title": "only"}))
+    res = core.extend_channel(old["code"], None, notify=False)
+    assert res["expires"] is None  # extended to "never"
+    assert core.code_expiry(res["code"]) is None
+    assert "notified" not in res
+    snap_old = core.channel_snapshot(old["code"], 10)
+    assert [m["title"] for m in snap_old["messages"]] == ["only"]
+    assert push_calls == []

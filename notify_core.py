@@ -11,6 +11,7 @@ Design rules (see CLAUDE.md):
 """
 from __future__ import annotations
 
+import datetime
 import hashlib
 import hmac
 import ipaddress
@@ -32,6 +33,12 @@ from pywebpush import WebPushException, webpush
 
 CODE_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 B64ISH_RE = re.compile(r"^[A-Za-z0-9+/_=-]{10,400}$")
+# Auto-remove: a channel created with an end date carries it INSIDE the code as
+# a "-expYYYYMMDD" suffix (still matches CODE_RE → no format migration). The
+# server hashes the whole code, so tampering with the suffix simply addresses a
+# different (non-existent) channel — the date is integrity-protected for free.
+CODE_EXP_RE = re.compile(r"-exp(\d{8})$")
+MAX_AUTO_REMOVE_DAYS = 3650
 
 MAX_NAME = 80
 MAX_TITLE = 120
@@ -112,6 +119,53 @@ def generate_code() -> str:
 
 def valid_code(code: object) -> bool:
     return isinstance(code, str) and bool(CODE_RE.fullmatch(code))
+
+
+def expiry_suffix(auto_remove_days: "int | None") -> str:
+    """'-expYYYYMMDD' (UTC) for a self-removing channel, '' for never."""
+    if not auto_remove_days:
+        return ""
+    end = time.gmtime(time.time() + auto_remove_days * 86400)
+    return "-exp%04d%02d%02d" % (end.tm_year, end.tm_mon, end.tm_mday)
+
+
+def code_expiry(code: str) -> "int | None":
+    """Epoch seconds at which this code's channel auto-removes (the end of
+    the UTC day encoded in the '-expYYYYMMDD' suffix), or None for a code
+    without a (valid) suffix — a random code virtually never matches one."""
+    m = CODE_EXP_RE.search(code or "")
+    if not m:
+        return None
+    s = m.group(1)
+    try:
+        day = datetime.datetime(
+            int(s[:4]), int(s[4:6]), int(s[6:8]), tzinfo=datetime.timezone.utc
+        )
+    except ValueError:
+        return None
+    return int(day.timestamp()) + 86400
+
+
+def validate_auto_remove_days(value: object) -> "int | None":
+    """None/0/'' mean never; otherwise a whole number of days (1..3650)."""
+    if value in (None, 0, ""):
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("auto_remove_days must be a whole number of days")
+    if not 1 <= value <= MAX_AUTO_REMOVE_DAYS:
+        raise ValueError(
+            f"auto_remove_days must be between 1 and {MAX_AUTO_REMOVE_DAYS}"
+        )
+    return value
+
+
+def _ttl_for(expires: "int | None") -> int:
+    """Storage TTL: the inactivity window, but never past the auto-remove
+    date — Redis then deletes an expired channel entirely by itself."""
+    ttl = channel_ttl_seconds()
+    if expires:
+        ttl = max(1, min(ttl, expires - int(time.time())))
+    return ttl
 
 
 def code_hash(code: str) -> str:
@@ -349,7 +403,7 @@ class MemoryStorage:
     def _entry(self, kh: str) -> "dict | None":
         return self._ch.get(kh)
 
-    def create_channel(self, kh: str, meta_json: str) -> bool:
+    def create_channel(self, kh: str, meta_json: str, ttl: "int | None" = None) -> bool:
         with self._lock:
             if kh in self._ch:
                 return False
@@ -361,7 +415,7 @@ class MemoryStorage:
             e = self._entry(kh)
             return e["meta"] if e else None
 
-    def put_sub(self, kh: str, eh: str, sub_json: str) -> None:
+    def put_sub(self, kh: str, eh: str, sub_json: str, ttl: "int | None" = None) -> None:
         with self._lock:
             e = self._entry(kh)
             if e is not None:
@@ -390,12 +444,22 @@ class MemoryStorage:
             e = self._entry(kh)
             return len(e["subs"]) if e else 0
 
-    def add_message(self, kh: str, msg_json: str, cap: int) -> None:
+    def add_message(self, kh: str, msg_json: str, cap: int, ttl: "int | None" = None) -> None:
         with self._lock:
             e = self._entry(kh)
             if e is not None:
                 e["msgs"].insert(0, msg_json)
                 del e["msgs"][cap:]
+
+    def seed_messages(
+        self, kh: str, msgs_json: "list[str]", cap: int, ttl: "int | None" = None
+    ) -> None:
+        """Bulk-fill a (fresh) channel's message list, newest first — used when
+        an extended successor channel inherits the old channel's messages."""
+        with self._lock:
+            e = self._entry(kh)
+            if e is not None:
+                e["msgs"] = list(msgs_json)[:cap]
 
     def get_messages(self, kh: str, limit: int) -> "list[str]":
         with self._lock:
@@ -470,22 +534,22 @@ class RedisStorage:
     def _k(kind: str, kh: str) -> str:
         return f"nbw:{kind}:{kh}"
 
-    def create_channel(self, kh: str, meta_json: str) -> bool:
-        ttl = str(channel_ttl_seconds())
+    def create_channel(self, kh: str, meta_json: str, ttl: "int | None" = None) -> bool:
+        t = str(ttl if ttl else channel_ttl_seconds())
         res = self._pipeline(
-            [["SET", self._k("meta", kh), meta_json, "NX", "EX", ttl]]
+            [["SET", self._k("meta", kh), meta_json, "NX", "EX", t]]
         )
         return res[0] == "OK"
 
     def get_channel(self, kh: str) -> "str | None":
         return self._pipeline([["GET", self._k("meta", kh)]])[0]
 
-    def put_sub(self, kh: str, eh: str, sub_json: str) -> None:
-        ttl = str(channel_ttl_seconds())
+    def put_sub(self, kh: str, eh: str, sub_json: str, ttl: "int | None" = None) -> None:
+        t = str(ttl if ttl else channel_ttl_seconds())
         self._pipeline(
             [
                 ["HSET", self._k("subs", kh), eh, sub_json],
-                ["EXPIRE", self._k("subs", kh), ttl],
+                ["EXPIRE", self._k("subs", kh), t],
             ]
         )
 
@@ -502,13 +566,28 @@ class RedisStorage:
     def sub_count(self, kh: str) -> int:
         return int(self._pipeline([["HLEN", self._k("subs", kh)]])[0] or 0)
 
-    def add_message(self, kh: str, msg_json: str, cap: int) -> None:
-        ttl = str(channel_ttl_seconds())
+    def add_message(self, kh: str, msg_json: str, cap: int, ttl: "int | None" = None) -> None:
+        t = str(ttl if ttl else channel_ttl_seconds())
         self._pipeline(
             [
                 ["LPUSH", self._k("msgs", kh), msg_json],
                 ["LTRIM", self._k("msgs", kh), "0", str(cap - 1)],
-                ["EXPIRE", self._k("msgs", kh), ttl],
+                ["EXPIRE", self._k("msgs", kh), t],
+            ]
+        )
+
+    def seed_messages(
+        self, kh: str, msgs_json: "list[str]", cap: int, ttl: "int | None" = None
+    ) -> None:
+        if not msgs_json:
+            return
+        t = str(ttl if ttl else channel_ttl_seconds())
+        # the stored list is newest-first; RPUSH in that same order recreates it
+        self._pipeline(
+            [
+                ["RPUSH", self._k("msgs", kh), *msgs_json],
+                ["LTRIM", self._k("msgs", kh), "0", str(cap - 1)],
+                ["EXPIRE", self._k("msgs", kh), t],
             ]
         )
 
@@ -614,37 +693,127 @@ def diagnostics() -> dict:
 # ------------------------------------------------------ domain operations
 
 
-def create_channel(name: str, send_password: str = "") -> dict:
-    storage = get_storage()
+def _live_meta(storage, kh: str) -> "dict | None":
+    """Channel meta, or None when the channel is unknown OR past its
+    auto-remove date. The Redis TTL deletes the data at that moment by
+    itself; this guard covers the in-memory backend and any clock lag."""
+    meta_json = storage.get_channel(kh)
+    if meta_json is None:
+        return None
+    meta = _load_stored(meta_json)
+    exp = meta.get("expires")
+    if exp and int(time.time()) >= exp:
+        return None
+    return meta
+
+
+def _new_channel(storage, name: str, created_meta: dict, suffix: str) -> dict:
+    """Allocate a fresh code (+ optional expiry suffix) and store its meta."""
     for _ in range(3):
-        code = generate_code()
-        meta = {"name": name, "created": int(time.time())}
-        if send_password:
-            meta["send_pw"] = _send_password_hash(send_password)
-        if storage.create_channel(code_hash(code), json.dumps(meta)):
+        code = generate_code() + suffix
+        expires = code_expiry(code)
+        meta = dict(created_meta)
+        if expires:
+            meta["expires"] = expires
+        if storage.create_channel(code_hash(code), json.dumps(meta), _ttl_for(expires)):
             return {
                 "code": code,
                 "name": name,
                 "created": meta["created"],
-                "send_protected": bool(send_password),
+                "send_protected": bool(meta.get("send_pw")),
+                "expires": expires,
             }
     raise StorageError("could not create channel")
+
+
+def create_channel(
+    name: str, send_password: str = "", auto_remove_days: "int | None" = None
+) -> dict:
+    storage = get_storage()
+    meta = {"name": name, "created": int(time.time())}
+    if send_password:
+        meta["send_pw"] = _send_password_hash(send_password)
+    return _new_channel(storage, name, meta, expiry_suffix(auto_remove_days))
+
+
+def extend_channel(
+    old_code: str,
+    auto_remove_days: "int | None",
+    send_password: object = None,
+    notify: bool = True,
+) -> "dict | None":
+    """'Extend' a self-removing channel by creating a SUCCESSOR channel with a
+    new end date (the old date is baked into the old code's hash, so it cannot
+    be changed in place). The successor inherits the channel name, the
+    send-password hash and all stored messages; the old channel is left
+    untouched and still dies at its own date. Optionally a final migration
+    message is pushed to the old channel's subscribers so they can switch with
+    one tap — the new code travels ONLY in the encrypted push payload (as a
+    fragment URL), never in the stored message, so storage still never holds a
+    raw code. Returns the new channel dict, or None when the old channel is
+    unknown or already expired. Raises SendForbidden on a wrong password."""
+    storage = get_storage()
+    old_kh = code_hash(old_code)
+    old_meta = _live_meta(storage, old_kh)
+    if old_meta is None:
+        return None
+    _require_send_password(old_meta, send_password)
+
+    meta = {"name": old_meta.get("name", ""), "created": int(time.time())}
+    if old_meta.get("send_pw"):
+        meta["send_pw"] = old_meta["send_pw"]
+    result = _new_channel(
+        storage, meta["name"], meta, expiry_suffix(auto_remove_days)
+    )
+
+    # copy the stored messages BEFORE the migration notice, so the successor
+    # starts with exactly the old content (order + timestamps preserved)
+    msgs = storage.get_messages(old_kh, max_messages())
+    if msgs:
+        storage.seed_messages(
+            code_hash(result["code"]), msgs, max_messages(), _ttl_for(result["expires"])
+        )
+    result["messages_copied"] = len(msgs)
+
+    if notify:
+        exp = result["expires"]
+        until = (
+            "now runs until " + time.strftime("%Y-%m-%d", time.gmtime(exp - 1))
+            if exp
+            else "now runs without an end date"
+        )
+        notice = publish(
+            old_code,
+            {
+                "title": "Channel extended: " + (meta["name"] or "this channel"),
+                "body": "This channel "
+                + until
+                + " under a NEW code. Tap this notification to switch, or ask "
+                "the sender for the new QR code / link. The old channel stops "
+                "on its original end date.",
+                "url": "",
+            },
+            send_password,
+            push_url="/a#codes=" + result["code"],
+        )
+        result["notified"] = (notice or {}).get("sent", 0)
+    return result
 
 
 def channel_snapshot(code: str, limit: int) -> "dict | None":
     """Channel meta + recent messages + subscriber count, or None."""
     storage = get_storage()
     kh = code_hash(code)
-    meta_json = storage.get_channel(kh)
-    if meta_json is None:
+    meta = _live_meta(storage, kh)
+    if meta is None:
         return None
-    meta = _load_stored(meta_json)
     messages = [_load_stored(m) for m in storage.get_messages(kh, limit)]
     return {
         "channel": {
             "name": meta.get("name", ""),
             "created": meta.get("created"),
             "send_protected": bool(meta.get("send_pw")),
+            "expires": meta.get("expires"),
         },
         "subscribers": storage.sub_count(kh),
         "messages": messages,
@@ -669,18 +838,20 @@ def subscribe(code: str, subscription: object) -> "int | None":
     sub = validate_subscription(subscription)
     storage = get_storage()
     kh = code_hash(code)
-    if storage.get_channel(kh) is None:
+    meta = _live_meta(storage, kh)
+    if meta is None:
         return None
+    ttl = _ttl_for(meta.get("expires"))
     eh = endpoint_hash(sub["endpoint"])
     existed = storage.sub_exists(kh, eh)
     cap = max_subs_per_channel()
     if not existed and storage.sub_count(kh) >= cap:
         raise ChannelFull()
-    storage.put_sub(kh, eh, json.dumps(sub))
+    storage.put_sub(kh, eh, json.dumps(sub), ttl)
     if not existed and storage.sub_count(kh) > cap:
         storage.delete_sub(kh, eh)
         raise ChannelFull()
-    storage.touch(kh, channel_ttl_seconds())
+    storage.touch(kh, ttl)
     return storage.sub_count(kh)
 
 
@@ -690,7 +861,7 @@ def unsubscribe(code: str, endpoint: object) -> "bool | None":
         raise ValueError("endpoint is required")
     storage = get_storage()
     kh = code_hash(code)
-    if storage.get_channel(kh) is None:
+    if _live_meta(storage, kh) is None:
         return None
     return storage.delete_sub(kh, endpoint_hash(endpoint))
 
@@ -702,10 +873,10 @@ def delete_message(code: str, msg_id: object, send_password: object = None) -> "
         raise ValueError("message id is required")
     storage = get_storage()
     kh = code_hash(code)
-    meta_json = storage.get_channel(kh)
-    if meta_json is None:
+    meta = _live_meta(storage, kh)
+    if meta is None:
         return None
-    _require_send_password(_load_stored(meta_json), send_password)
+    _require_send_password(meta, send_password)
     return storage.delete_message(kh, msg_id)
 
 
@@ -717,10 +888,10 @@ def clear_messages(
     protected channel with a wrong password."""
     storage = get_storage()
     kh = code_hash(code)
-    meta_json = storage.get_channel(kh)
-    if meta_json is None:
+    meta = _live_meta(storage, kh)
+    if meta is None:
         return None
-    _require_send_password(_load_stored(meta_json), send_password)
+    _require_send_password(meta, send_password)
     storage.clear_messages(kh, keep if isinstance(keep, int) and keep > 0 else 0)
     return True
 
@@ -732,17 +903,26 @@ def _truncate_utf8(text: str, max_bytes: int) -> str:
     return encoded[:max_bytes].decode("utf-8", "ignore").rstrip() + "…"
 
 
-def publish(code: str, message: dict, send_password: object = None) -> "dict | None":
+def publish(
+    code: str,
+    message: dict,
+    send_password: object = None,
+    push_url: "str | None" = None,
+) -> "dict | None":
     """Store a validated message and push it to all subscribers.
     Returns result counts, or None for unknown channels. Raises SendForbidden
-    if the channel requires a send password and it is missing/wrong."""
+    if the channel requires a send password and it is missing/wrong.
+
+    push_url overrides the link in the PUSHED payload only (the stored
+    message keeps the original url) — used by the extend-channel migration
+    notice so the successor's raw code is never written to storage."""
     storage = get_storage()
     kh = code_hash(code)
-    meta_json = storage.get_channel(kh)
-    if meta_json is None:
+    meta = _live_meta(storage, kh)
+    if meta is None:
         return None
-    meta = _load_stored(meta_json)
     _require_send_password(meta, send_password)
+    ttl = _ttl_for(meta.get("expires"))
 
     msg = {
         "id": secrets.token_hex(4),
@@ -753,7 +933,7 @@ def publish(code: str, message: dict, send_password: object = None) -> "dict | N
     }
     # Storing the message is the load-bearing side effect; if it fails the
     # caller gets 502 and may safely retry (nothing was delivered).
-    storage.add_message(kh, json.dumps(msg), max_messages())
+    storage.add_message(kh, json.dumps(msg), max_messages(), ttl)
 
     result = {
         "stored": True,
@@ -767,7 +947,7 @@ def publish(code: str, message: dict, send_password: object = None) -> "dict | N
     # From here on a storage hiccup must NOT turn into a 502 — the message is
     # already stored, so a retry would duplicate it.
     try:
-        storage.touch(kh, channel_ttl_seconds())
+        storage.touch(kh, ttl)
     except StorageError:
         pass
 
@@ -778,18 +958,18 @@ def publish(code: str, message: dict, send_password: object = None) -> "dict | N
 
     # Bound the PUSHED payload by UTF-8 bytes (services reject >4096 bytes);
     # the stored message keeps its full text for the message list.
-    payload = json.dumps(
-        {
-            "title": _truncate_utf8(msg["title"], PUSH_TITLE_MAX_BYTES),
-            "body": _truncate_utf8(msg["body"], PUSH_BODY_MAX_BYTES),
-            "url": msg["url"],
-            "channel": _truncate_utf8(meta.get("name", ""), PUSH_CHANNEL_MAX_BYTES),
-            "tag": msg["id"],
-            "ts": msg["ts"],
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    payload_obj = {
+        "title": _truncate_utf8(msg["title"], PUSH_TITLE_MAX_BYTES),
+        "body": _truncate_utf8(msg["body"], PUSH_BODY_MAX_BYTES),
+        "url": push_url if push_url is not None else msg["url"],
+        "channel": _truncate_utf8(meta.get("name", ""), PUSH_CHANNEL_MAX_BYTES),
+        "tag": msg["id"],
+        "ts": msg["ts"],
+    }
+    if meta.get("expires"):
+        # lets the SW suppress a late-delivered push after the auto-remove date
+        payload_obj["exp"] = meta["expires"]
+    payload = json.dumps(payload_obj, ensure_ascii=False, separators=(",", ":"))
 
     try:
         subs = storage.get_subs(kh)
