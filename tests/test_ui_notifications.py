@@ -142,6 +142,50 @@ def test_expired_push_shows_replacement_not_the_message(notif_page):
     assert any(n["title"] == "Still alive" for n in notes)
 
 
+def test_push_lands_in_device_local_history(notif_page):
+    """The SW files every push (payload `ch`) into the device-local IndexedDB
+    store — the only record for no-storage channels — and the open tab
+    renders it. Two quick pushes must BOTH persist (keyed records, no
+    read-modify-write race)."""
+    from uikit import ch_of, idb_all
+
+    page, base, channel = notif_page
+    ch = ch_of(channel)
+    deliver_push(
+        page, base, {"title": "Hist A", "ch": ch, "tag": "hista111", "ts": 1700000001}
+    )
+    deliver_push(
+        page, base, {"title": "Hist B", "ch": ch, "tag": "histb222", "ts": 1700000002}
+    )
+    got = []
+    for _ in range(50):
+        got = [r["title"] for r in idb_all(page) if r["ch"] == ch]
+        if "Hist A" in got and "Hist B" in got:
+            break
+        page.wait_for_timeout(100)
+    assert "Hist A" in got and "Hist B" in got  # both persisted, no lost write
+    # the open tab renders the pushed message from the local store
+    page.wait_for_selector(".channel .msg-title:has-text('Hist B')", timeout=8000)
+
+
+def test_expired_push_purges_local_history(notif_page):
+    from uikit import ch_of, idb_all, seed_local
+
+    page, base, channel = notif_page
+    ch = ch_of(channel)
+    seed_local(page, ch, [{"id": "oldrec01", "ts": 1700000000, "title": "old"}])
+    assert any(r["ch"] == ch for r in idb_all(page))
+    # a late push for an expired channel wipes that channel's local records
+    deliver_push(
+        page, base, {"title": "gone", "ch": ch, "tag": "t-x", "exp": 1000}
+    )
+    for _ in range(50):
+        if not any(r["ch"] == ch for r in idb_all(page)):
+            break
+        page.wait_for_timeout(100)
+    assert not any(r["ch"] == ch for r in idb_all(page))
+
+
 def test_malformed_push_still_shows_a_notification(notif_page):
     # Chrome requires a visible notification for every push (userVisibleOnly);
     # our SW must cope with a non-JSON payload and still show something.

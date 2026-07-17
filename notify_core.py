@@ -159,6 +159,34 @@ def validate_auto_remove_days(value: object) -> "int | None":
     return value
 
 
+# Message storage is OPT-IN (anonymous-by-default): 0 = the server stores no
+# message content (push relay only — the DEFAULT for new channels), -1 = keep
+# until pushed out of the newest-50 / channel end (the legacy behavior, and
+# what channels created before this setting existed keep doing), or a
+# retention in seconds after which the stored message expires.
+STORE_OFF = 0
+STORE_MAX = -1
+MIN_STORE_SECONDS = 60
+MAX_STORE_SECONDS = MAX_AUTO_REMOVE_DAYS * 86400
+
+
+def validate_message_store(value: object) -> int:
+    """Parse a message-storage setting: 'off'/0 → STORE_OFF, 'max'/-1 →
+    STORE_MAX, otherwise retention seconds (60 s .. 3650 d)."""
+    if value in ("off", 0):
+        return STORE_OFF
+    if value in ("max", -1):
+        return STORE_MAX
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("message storage must be 'off', 'max' or seconds")
+    if not MIN_STORE_SECONDS <= value <= MAX_STORE_SECONDS:
+        raise ValueError(
+            "message storage seconds must be between "
+            f"{MIN_STORE_SECONDS} and {MAX_STORE_SECONDS}"
+        )
+    return value
+
+
 def _ttl_for(expires: "int | None") -> int:
     """Storage TTL: the inactivity window, but never past the auto-remove
     date — Redis then deletes an expired channel entirely by itself."""
@@ -475,6 +503,14 @@ class MemoryStorage:
             e["msgs"] = [m for m in e["msgs"] if _msg_id_of(m) != msg_id]
             return len(e["msgs"]) < before
 
+    def remove_message_values(self, kh: str, raws: "list[str]") -> None:
+        """Physically drop specific stored message values (expiry pruning)."""
+        with self._lock:
+            e = self._entry(kh)
+            if e is not None and raws:
+                gone = set(raws)
+                e["msgs"] = [m for m in e["msgs"] if m not in gone]
+
     def clear_messages(self, kh: str, keep: int = 0) -> int:
         with self._lock:
             e = self._entry(kh)
@@ -605,6 +641,14 @@ class RedisStorage:
                 return bool(res[0])
         return False
 
+    def remove_message_values(self, kh: str, raws: "list[str]") -> None:
+        """Physically drop specific stored message values (expiry pruning) —
+        one pipeline call regardless of how many values expire at once."""
+        if raws:
+            self._pipeline(
+                [["LREM", self._k("msgs", kh), "0", raw] for raw in raws]
+            )
+
     def clear_messages(self, kh: str, keep: int = 0) -> int:
         if keep > 0:
             # keep the newest `keep` (index 0 is newest); drop the rest
@@ -722,15 +766,19 @@ def _new_channel(storage, name: str, created_meta: dict, suffix: str) -> dict:
                 "created": meta["created"],
                 "send_protected": bool(meta.get("send_pw")),
                 "expires": expires,
+                "message_store": meta.get("msg_store", STORE_MAX),
             }
     raise StorageError("could not create channel")
 
 
 def create_channel(
-    name: str, send_password: str = "", auto_remove_days: "int | None" = None
+    name: str,
+    send_password: str = "",
+    auto_remove_days: "int | None" = None,
+    message_store: int = STORE_OFF,
 ) -> dict:
     storage = get_storage()
-    meta = {"name": name, "created": int(time.time())}
+    meta = {"name": name, "created": int(time.time()), "msg_store": message_store}
     if send_password:
         meta["send_pw"] = _send_password_hash(send_password)
     return _new_channel(storage, name, meta, expiry_suffix(auto_remove_days))
@@ -741,6 +789,7 @@ def extend_channel(
     auto_remove_days: "int | None",
     send_password: object = None,
     notify: bool = True,
+    message_store: "int | None" = None,
 ) -> "dict | None":
     """'Extend' a self-removing channel by creating a SUCCESSOR channel with a
     new end date (the old date is baked into the old code's hash, so it cannot
@@ -762,6 +811,12 @@ def extend_channel(
     meta = {"name": old_meta.get("name", ""), "created": int(time.time())}
     if old_meta.get("send_pw"):
         meta["send_pw"] = old_meta["send_pw"]
+    # the successor inherits the message-storage setting unless overridden
+    meta["msg_store"] = (
+        message_store
+        if message_store is not None
+        else old_meta.get("msg_store", STORE_MAX)
+    )
     result = _new_channel(
         storage, meta["name"], meta, expiry_suffix(auto_remove_days)
     )
@@ -800,20 +855,34 @@ def extend_channel(
     return result
 
 
+def _msg_expired(msg: dict, now: int) -> bool:
+    exp = msg.get("expires_at")
+    return bool(exp) and now >= exp
+
+
 def channel_snapshot(code: str, limit: int) -> "dict | None":
-    """Channel meta + recent messages + subscriber count, or None."""
+    """Channel meta + recent stored messages + subscriber count, or None.
+    Messages past their per-message retention are filtered out on read (the
+    physical prune happens on the next write — Redis lists have no
+    per-element TTL). No-storage channels simply have an empty list."""
     storage = get_storage()
     kh = code_hash(code)
     meta = _live_meta(storage, kh)
     if meta is None:
         return None
-    messages = [_load_stored(m) for m in storage.get_messages(kh, limit)]
+    now = int(time.time())
+    messages = [
+        m
+        for m in (_load_stored(r) for r in storage.get_messages(kh, limit))
+        if not _msg_expired(m, now)
+    ]
     return {
         "channel": {
             "name": meta.get("name", ""),
             "created": meta.get("created"),
             "send_protected": bool(meta.get("send_pw")),
             "expires": meta.get("expires"),
+            "message_store": meta.get("msg_store", STORE_MAX),
         },
         "subscribers": storage.sub_count(kh),
         "messages": messages,
@@ -903,15 +972,39 @@ def _truncate_utf8(text: str, max_bytes: int) -> str:
     return encoded[:max_bytes].decode("utf-8", "ignore").rstrip() + "…"
 
 
+def _prune_expired_messages(storage, kh: str, now: int) -> None:
+    """Physically remove stored messages past their per-message retention
+    (reads only ever serve unexpired ones; this bounds the list). Best
+    effort — a storage hiccup here must never fail the send."""
+    try:
+        expired = [
+            raw
+            for raw in storage.get_messages(kh, max_messages())
+            if _msg_expired(_load_stored(raw), now)
+        ]
+        storage.remove_message_values(kh, expired)
+    except StorageError:
+        pass
+
+
 def publish(
     code: str,
     message: dict,
     send_password: object = None,
     push_url: "str | None" = None,
+    store: "int | None" = None,
 ) -> "dict | None":
-    """Store a validated message and push it to all subscribers.
+    """Push a validated message to all subscribers, storing it on the server
+    ONLY when the channel (or the per-message `store` override) opts in.
     Returns result counts, or None for unknown channels. Raises SendForbidden
     if the channel requires a send password and it is missing/wrong.
+
+    Storage is opt-in by design (anonymous default): effective retention is
+    the per-message `store` value if given, else the channel's `msg_store`
+    (channels created before the setting existed keep the legacy keep-max
+    behavior). STORE_OFF → pure relay, nothing written; a positive retention
+    stamps `expires_at` into the stored message (filtered on read, pruned on
+    write).
 
     push_url overrides the link in the PUSHED payload only (the stored
     message keeps the original url) — used by the extend-channel migration
@@ -923,20 +1016,27 @@ def publish(
         return None
     _require_send_password(meta, send_password)
     ttl = _ttl_for(meta.get("expires"))
+    retention = store if store is not None else meta.get("msg_store", STORE_MAX)
 
+    now = int(time.time())
     msg = {
         "id": secrets.token_hex(4),
-        "ts": int(time.time()),
+        "ts": now,
         "title": message["title"],
         "body": message["body"],
         "url": message["url"],
     }
-    # Storing the message is the load-bearing side effect; if it fails the
-    # caller gets 502 and may safely retry (nothing was delivered).
-    storage.add_message(kh, json.dumps(msg), max_messages(), ttl)
+    if retention != STORE_OFF:
+        stored_msg = dict(msg)
+        if retention > 0:
+            stored_msg["expires_at"] = now + retention
+        # Storing is the load-bearing side effect here; if it fails the caller
+        # gets 502 and may safely retry (nothing was pushed yet).
+        storage.add_message(kh, json.dumps(stored_msg), max_messages(), ttl)
+        _prune_expired_messages(storage, kh, now)
 
     result = {
-        "stored": True,
+        "stored": retention != STORE_OFF,
         "sent": 0,
         "failed": 0,
         "pruned": 0,
@@ -944,8 +1044,8 @@ def publish(
         "message": msg,
     }
 
-    # From here on a storage hiccup must NOT turn into a 502 — the message is
-    # already stored, so a retry would duplicate it.
+    # From here on a storage hiccup must NOT turn into a 502 — the message
+    # (if stored) is already stored, so a retry could duplicate it.
     try:
         storage.touch(kh, ttl)
     except StorageError:
@@ -965,6 +1065,11 @@ def publish(
         "channel": _truncate_utf8(meta.get("name", ""), PUSH_CHANNEL_MAX_BYTES),
         "tag": msg["id"],
         "ts": msg["ts"],
+        # channel identifier for the device-local history: a 48-bit kh prefix,
+        # computable client-side from the code alone (sha256(code)[:12]). It
+        # rides only inside the E2E-encrypted payload — never in URLs — and
+        # gives a recipient (who must already hold the code) nothing new.
+        "ch": kh[:12],
     }
     if meta.get("expires"):
         # lets the SW suppress a late-delivered push after the auto-remove date

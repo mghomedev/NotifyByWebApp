@@ -38,6 +38,11 @@ the server.
 - **Delete messages** — one at a time, all at once, or just the older ones (the newest 3
   stay; older ones fold into a "More…" expander).
 - **Optional send-password** per channel (only holders of the password can send).
+- **Anonymous by default — no server-side message storage.** Unless a channel opts in,
+  the server never keeps message content: it only relays encrypted notifications, and
+  each device keeps its own local copy (see "Where messages live" below). Channels can
+  opt into server storage with a chosen retention (1 h / 1 d / 1 w / 1 month / custom),
+  and every single message can override the channel's setting.
 - **Self-removing channels** — optionally pick an end date when creating (1 day / 1 week /
   1 month / 1 year / custom days, or an exact date from a calendar picker). The date is
   encoded into the channel code itself
@@ -66,6 +71,8 @@ curl -X POST https://YOUR-DEPLOYMENT/api/channel \
 # optional: {"name":"Event","send_password":"only-managers"} → sending needs the password
 # optional: {"name":"Party","auto_remove_days":30} → the channel deletes itself after 30
 #   days; the end date is encoded in the returned code as "…-expYYYYMMDD"
+# optional: {"name":"Log","message_store":"max"} → messages are stored on the server
+#   (default is "off" = pure relay, nothing at rest; or retention seconds e.g. 86400)
 
 # extend a self-removing channel: creates a SUCCESSOR channel (new code) with the same
 # name/password and all messages; optionally notifies subscribers to switch (default true)
@@ -79,6 +86,8 @@ curl -X POST https://YOUR-DEPLOYMENT/api/message \
   -d '{"code":"YOUR_CODE","title":"Build failed","body":"main is red","url":"https://ci/run/42"}'
 # title OR body is required (title is optional; if omitted it is derived from the body).
 # add "send_password":"…" if the channel is protected.
+# optional "store":"off"|"max"|seconds → per-message override of the channel's
+#   server-storage setting (any code-holder may use it).
 
 # read recent messages + channel info
 curl -X POST https://YOUR-DEPLOYMENT/api/messages \
@@ -109,6 +118,35 @@ inactivity (or on their auto-remove date, whichever comes first).
 
 On iPhone/iPad you must open the app from its **Home Screen icon** — push does not work in a
 Safari browser tab. The app detects an unsupported/too-old device and shows a clear warning.
+
+## Where messages live
+
+**By default, this service's server stores no message content at all.** A message is
+validated, pushed to the subscribed devices as an end-to-end-encrypted notification, and
+forgotten — the app's message list is each **device's own local history** (filled by the
+notifications it receives and by your own sends). The honest trade-offs of the default:
+receiving requires notifications to be enabled, a device offline for more than ~24 hours
+(or someone who subscribes later) misses the message permanently, and text length is
+bounded by the notification size (~1400 bytes).
+
+**Opt-in server storage:** the channel creator can choose at creation (and any sender per
+message) to store messages on the server — until pushed out of the newest 50 / the
+channel's end ("max"), or for a retention window (1 hour … custom days). Stored messages
+give every device the history in the app, catch-up after longer offline periods, full-length
+texts, and delete-for-everyone. The app explains these pros & cons right at the choice.
+
+Two things hold **regardless** of the storage setting:
+
+- Every notification travels through **Apple's / Google's / the browser vendor's push
+  servers**, which queue it during delivery (typically up to ~24 h for offline devices)
+  under their own policies, outside this service's control. The payload is end-to-end
+  encrypted, so those servers cannot read the content — but the encrypted copy resides on
+  their infrastructure.
+- ⚠ Messages are also stored **on each client device** that sent or received them: in the
+  system notification center, in the app's local message store (IndexedDB) and in browser
+  caches. To remove all messages **from the local device**: use the browser's
+  private/incognito mode from the start, remove the channel in the app, or clear this
+  site's browsing data — and dismiss its notifications in the notification center.
 
 ## Your saved channels stay on your device
 
@@ -148,7 +186,7 @@ only in local `.env` files (gitignored) and Vercel environment variables.
 python -m venv .venv && . .venv/Scripts/activate   # .venv/bin/activate on Linux/macOS
 pip install -r requirements-dev.txt
 python -m playwright install chromium              # once, for the browser UI tests
-python -m pytest                                   # 209 tests, fully offline
+python -m pytest                                   # 222 tests, fully offline
 ```
 
 Tests include real-crypto Web Push (a fake device decrypts the actual payload) and browser

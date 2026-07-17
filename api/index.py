@@ -304,7 +304,11 @@ class handler(BaseHTTPRequestHandler):
         name = core.clean_channel_name(payload.get("name"))
         send_password = core.clean_send_password(payload.get("send_password"))
         days = core.validate_auto_remove_days(payload.get("auto_remove_days"))
-        result = core.create_channel(name, send_password, days)
+        ms = payload.get("message_store")
+        message_store = (
+            core.STORE_OFF if ms is None else core.validate_message_store(ms)
+        )
+        result = core.create_channel(name, send_password, days, message_store)
         self._json(200, {"ok": True, **result})
 
     def _post_channel_extend(self, payload: dict) -> None:
@@ -322,8 +326,14 @@ class handler(BaseHTTPRequestHandler):
             return
         days = core.validate_auto_remove_days(payload.get("auto_remove_days"))
         notify = payload.get("notify", True)
+        ms = payload.get("message_store")
+        message_store = None if ms is None else core.validate_message_store(ms)
         result = core.extend_channel(
-            code, days, payload.get("send_password"), notify=bool(notify)
+            code,
+            days,
+            payload.get("send_password"),
+            notify=bool(notify),
+            message_store=message_store,
         )
         if result is None:
             self._error(404, "unknown channel")
@@ -355,7 +365,11 @@ class handler(BaseHTTPRequestHandler):
         if code is None:
             return
         message = core.validate_message(payload)
-        result = core.publish(code, message, payload.get("send_password"))
+        st = payload.get("store")
+        store = None if st is None else core.validate_message_store(st)
+        result = core.publish(
+            code, message, payload.get("send_password"), store=store
+        )
         if result is None:
             self._error(404, "unknown channel")
             return

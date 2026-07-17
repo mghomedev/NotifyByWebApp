@@ -165,7 +165,11 @@ def server(env):
 
 @pytest.fixture()
 def channel(server):
-    """A freshly created channel; returns its code."""
-    resp = server.post("/api/channel", {"name": "Test Channel"})
+    """A freshly created channel WITH server-side message storage (the
+    legacy keep-max behavior most storage-dependent tests rely on; new
+    channels default to no-storage — covered by dedicated tests)."""
+    resp = server.post(
+        "/api/channel", {"name": "Test Channel", "message_store": "max"}
+    )
     assert resp.status == 200 and resp.json["ok"]
     return resp.json["code"]

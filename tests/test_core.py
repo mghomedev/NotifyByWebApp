@@ -428,7 +428,7 @@ def test_clean_send_password():
 
 def test_send_password_gates_publish(env):
     core.reset_storage_for_tests()
-    ch = core.create_channel("Event", send_password="manager-key")
+    ch = core.create_channel("Event", send_password="manager-key", message_store=core.STORE_MAX)
     assert ch["send_protected"] is True
     code = ch["code"]
     # only a hash is stored, never the raw password
@@ -446,7 +446,7 @@ def test_send_password_gates_publish(env):
 
 def test_unprotected_channel_ignores_send_password(env):
     core.reset_storage_for_tests()
-    ch = core.create_channel("Open")
+    ch = core.create_channel("Open", message_store=core.STORE_MAX)
     assert ch["send_protected"] is False
     code = ch["code"]
     msg = core.validate_message({"title": "hi"})
@@ -464,7 +464,7 @@ def test_snapshot_reports_send_protected(env):
 
 def test_delete_and_clear_messages(env):
     core.reset_storage_for_tests()
-    code = core.create_channel("C")["code"]
+    code = core.create_channel("C", message_store=core.STORE_MAX)["code"]
     id1 = core.publish(code, core.validate_message({"title": "one"}))["message"]["id"]
     core.publish(code, core.validate_message({"title": "two"}))
     assert len(core.channel_snapshot(code, 10)["messages"]) == 2
@@ -477,7 +477,7 @@ def test_delete_and_clear_messages(env):
 
 def test_clear_messages_keep_newest(env):
     core.reset_storage_for_tests()
-    code = core.create_channel("C")["code"]
+    code = core.create_channel("C", message_store=core.STORE_MAX)["code"]
     for i in range(5):
         core.publish(code, core.validate_message({"title": f"m{i}"}))
     # keep the newest 3, drop the older 2
@@ -498,7 +498,7 @@ def test_delete_message_bad_id_and_unknown_channel(env):
 
 def test_delete_requires_password_on_protected_channel(env):
     core.reset_storage_for_tests()
-    code = core.create_channel("P", send_password="phrase-key")["code"]
+    code = core.create_channel("P", send_password="phrase-key", message_store=core.STORE_MAX)["code"]
     mid = core.publish(
         code, core.validate_message({"title": "x"}), "phrase-key"
     )["message"]["id"]
@@ -594,7 +594,7 @@ def test_expired_channel_is_gone_everywhere(env, monkeypatch):
 def test_extend_channel_copies_meta_and_messages(env, push_calls):
     from conftest import fake_subscription
 
-    old = core.create_channel("Party", send_password="gate-pass", auto_remove_days=2)
+    old = core.create_channel("Party", send_password="gate-pass", auto_remove_days=2, message_store=core.STORE_MAX)
     for i in range(3):
         core.publish(
             old["code"],
@@ -633,8 +633,105 @@ def test_extend_channel_copies_meta_and_messages(env, push_calls):
     assert mig["exp"] == old["expires"]  # SW suppresses it after the old end date
 
 
+# ---------------------------------------------------- message storage opt-in
+
+
+def test_validate_message_store():
+    assert core.validate_message_store("off") == core.STORE_OFF
+    assert core.validate_message_store(0) == core.STORE_OFF
+    assert core.validate_message_store("max") == core.STORE_MAX
+    assert core.validate_message_store(-1) == core.STORE_MAX
+    assert core.validate_message_store(3600) == 3600
+    assert core.validate_message_store(core.MAX_STORE_SECONDS) == core.MAX_STORE_SECONDS
+    for bad in (True, "forever", 59, core.MAX_STORE_SECONDS + 1, 1.5, -2):
+        with pytest.raises(ValueError):
+            core.validate_message_store(bad)
+
+
+def test_default_channel_stores_nothing(env):
+    """The anonymous default: the server relays the push but never writes
+    message content — the response still carries the message for the
+    sender's device-local echo."""
+    core.reset_storage_for_tests()
+    code = core.create_channel("Private")["code"]  # default = STORE_OFF
+    res = core.publish(code, core.validate_message({"title": "secret"}))
+    assert res["stored"] is False
+    assert res["message"]["title"] == "secret" and res["message"]["id"]
+    snap = core.channel_snapshot(code, 10)
+    assert snap["messages"] == []
+    assert snap["channel"]["message_store"] == core.STORE_OFF
+
+
+def test_per_message_store_overrides_channel_default(env):
+    core.reset_storage_for_tests()
+    off = core.create_channel("Off")["code"]  # default off
+    on = core.create_channel("On", message_store=core.STORE_MAX)["code"]
+    # a sender may opt a single message INTO storage on a no-storage channel…
+    res = core.publish(off, core.validate_message({"title": "keep me"}), store=core.STORE_MAX)
+    assert res["stored"] is True
+    assert [m["title"] for m in core.channel_snapshot(off, 10)["messages"]] == ["keep me"]
+    # …and OUT of storage on a storing channel
+    res = core.publish(on, core.validate_message({"title": "fleeting"}), store=core.STORE_OFF)
+    assert res["stored"] is False
+    assert core.channel_snapshot(on, 10)["messages"] == []
+
+
+def test_message_retention_expires_and_prunes(env, monkeypatch):
+    core.reset_storage_for_tests()
+    code = core.create_channel("Retained", message_store=3600)["code"]
+    core.publish(code, core.validate_message({"title": "short-lived"}))
+    snap = core.channel_snapshot(code, 10)
+    assert [m["title"] for m in snap["messages"]] == ["short-lived"]
+    assert snap["messages"][0]["expires_at"] > int(time.time())
+    # two hours later the message is gone from reads…
+    real = time.time
+    monkeypatch.setattr(core.time, "time", lambda: real() + 7200)
+    assert core.channel_snapshot(code, 10)["messages"] == []
+    # …and the next write physically prunes it while storing the new one
+    core.publish(code, core.validate_message({"title": "fresh"}))
+    storage = core.get_storage()
+    raws = storage.get_messages(core.code_hash(code), 50)
+    assert len(raws) == 1 and "fresh" in raws[0]
+
+
+def test_channel_without_msg_store_meta_keeps_legacy_behavior(env):
+    """Channels created before the setting existed have no msg_store in their
+    meta — they must keep storing exactly as before (no migration)."""
+    core.reset_storage_for_tests()
+    storage = core.get_storage()
+    code = core.generate_code()
+    storage.create_channel(
+        core.code_hash(code), json.dumps({"name": "Legacy", "created": 1})
+    )
+    res = core.publish(code, core.validate_message({"title": "old style"}))
+    assert res["stored"] is True
+    snap = core.channel_snapshot(code, 10)
+    assert [m["title"] for m in snap["messages"]] == ["old style"]
+    assert snap["channel"]["message_store"] == core.STORE_MAX
+
+
+def test_extend_inherits_message_store(env):
+    core.reset_storage_for_tests()
+    old = core.create_channel("Ephemeral", auto_remove_days=2)  # default off
+    res = core.extend_channel(old["code"], 30, notify=False)
+    assert res["message_store"] == core.STORE_OFF
+    # …unless explicitly overridden
+    res2 = core.extend_channel(old["code"], 30, notify=False, message_store=core.STORE_MAX)
+    assert res2["message_store"] == core.STORE_MAX
+
+
+def test_push_payload_carries_channel_id_prefix(env, push_calls):
+    from conftest import fake_subscription
+
+    core.reset_storage_for_tests()
+    code = core.create_channel("ChId")["code"]
+    core.subscribe(code, fake_subscription(1))
+    core.publish(code, core.validate_message({"title": "hi"}))
+    assert push_calls[-1]["payload"]["ch"] == core.code_hash(code)[:12]
+
+
 def test_extend_channel_without_notify_leaves_old_messages_alone(env, push_calls):
-    old = core.create_channel("Quiet", auto_remove_days=2)
+    old = core.create_channel("Quiet", auto_remove_days=2, message_store=core.STORE_MAX)
     core.publish(old["code"], core.validate_message({"title": "only"}))
     res = core.extend_channel(old["code"], None, notify=False)
     assert res["expires"] is None  # extended to "never"

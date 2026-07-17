@@ -53,6 +53,19 @@ system of its own</strong> to end-user devices. All delivery, rate limiting and 
 detection (including any false positives that may silently delay or drop messages) are
 handled entirely by the iOS, Android and web-browser platforms and are outside this
 service&rsquo;s control.</p>
+<p><strong>Where messages live.</strong> By default this service&rsquo;s server stores
+<strong>no message content</strong> &mdash; it only relays encrypted notifications; a
+channel&rsquo;s creator (or a sender, per message) can opt into server-side storage with a
+chosen retention time. Regardless of that setting, every notification travels through
+<strong>Apple&rsquo;s / Google&rsquo;s / the browser vendor&rsquo;s push servers</strong>,
+which queue it during delivery (typically up to ~24&nbsp;h for offline devices) under
+their own policies, outside this service&rsquo;s control &mdash; the content is
+end-to-end encrypted, so those servers cannot read it. Received and sent messages are
+also kept <strong>on each device itself</strong> (notification center, the app&rsquo;s
+local message store and browser caches): to remove all messages <strong>from the local
+device</strong>, use the browser&rsquo;s private/incognito mode from the start, remove the
+channel in the app, or clear the site&rsquo;s browsing data (cache/site data) &mdash; and
+dismiss the notifications in the system&rsquo;s notification center.</p>
 <p><strong>Do not rely on this service for any urgent, critical, medical, financial,
 safety-related or emergency notifications.</strong> To the maximum extent permitted
 by applicable law, the author and operator shall not be liable for any direct,
@@ -69,6 +82,16 @@ besitzt <strong>kein eigenes &Uuml;bertragungssystem</strong> zu Endger&auml;ten
 Ratenbegrenzung und Spam-Erkennung (einschlie&szlig;lich m&ouml;glicher Fehleinstufungen /
 False&nbsp;Positives) werden vollst&auml;ndig von den Plattformen iOS, Android und den
 Browser-Technologien &uuml;bernommen und liegen au&szlig;erhalb der Kontrolle dieses Dienstes.
+Standardm&auml;&szlig;ig speichert der Server dieses Dienstes <strong>keine
+Nachrichteninhalte</strong> (nur auf Wunsch, mit w&auml;hlbarer Aufbewahrungszeit); jede
+Benachrichtigung l&auml;uft aber &uuml;ber die Push-Server von Apple/Google bzw. des
+Browser-Herstellers, die sie w&auml;hrend der Zustellung (typisch bis ~24&nbsp;h)
+zwischenspeichern &mdash; Ende-zu-Ende-verschl&uuml;sselt und au&szlig;erhalb unserer
+Kontrolle. Empfangene und gesendete Nachrichten verbleiben zudem <strong>auf dem
+Ger&auml;t selbst</strong> (Benachrichtigungszentrale, lokaler Nachrichtenspeicher der
+App, Browser-Cache): Um alle Nachrichten vom lokalen Ger&auml;t zu entfernen, den
+Inkognito-Modus verwenden, den Kanal in der App entfernen oder die Website-Daten des
+Browsers l&ouml;schen &mdash; und Benachrichtigungen in der Zentrale schlie&szlig;en.
 Nicht f&uuml;r dringende, kritische, medizinische,
 finanzielle oder sicherheitsrelevante Benachrichtigungen verwenden. Eine Haftung
 f&uuml;r Sch&auml;den ist &ndash; soweit gesetzlich zul&auml;ssig &ndash;
@@ -90,6 +113,71 @@ COMPAT_HTML = """<details class="compat">
 <p class="muted">On iPhone and iPad you must open this app from its Home Screen icon &mdash;
 web push does not work in a Safari browser tab.</p>
 </details>"""
+
+# Device-local message history (IndexedDB) — spliced into the app page, the
+# landing page AND the service worker via the __NBW_DB__ placeholder so the
+# three copies can never drift. One record per received/sent message, keyed
+# "ch:id" (ch = sha256(code)[:12], id = server message id / notification tag).
+# add() not put(): the FIRST write wins, so a sender's full-length echo is
+# never clobbered by its own byte-truncated push copy arriving seconds later.
+# Local history is best-effort everywhere: failures must never break
+# notifications or the UI.
+_NBW_DB_JS = """
+function chOf(code){
+return crypto.subtle.digest('SHA-256',new TextEncoder().encode(code)).then(function(buf){
+var a=new Uint8Array(buf),s='';
+for(var i=0;i<6;i++)s+=('0'+a[i].toString(16)).slice(-2);
+return s})}
+function nbwDb(){
+return new Promise(function(res,rej){
+var rq=indexedDB.open('nbw',1);
+rq.onupgradeneeded=function(){rq.result.createObjectStore('msgs',{keyPath:'k'})};
+rq.onsuccess=function(){res(rq.result)};
+rq.onerror=function(){rej(rq.error)}})}
+function nbwAdd(rec){
+return nbwDb().then(function(db){
+return new Promise(function(res){
+var tx=db.transaction('msgs','readwrite');
+try{tx.objectStore('msgs').add(rec)}catch(e){}
+tx.oncomplete=function(){db.close();res(true)};
+tx.onerror=function(e){if(e&&e.preventDefault)e.preventDefault();db.close();res(false)};
+tx.onabort=function(){db.close();res(false)}})}).catch(function(){return false})}
+function nbwAll(){
+return nbwDb().then(function(db){
+return new Promise(function(res){
+var rq=db.transaction('msgs','readonly').objectStore('msgs').getAll();
+rq.onsuccess=function(){db.close();res(rq.result||[])};
+rq.onerror=function(){db.close();res([])}})}).catch(function(){return[]})}
+function nbwDel(k){
+return nbwDb().then(function(db){
+return new Promise(function(res){
+var tx=db.transaction('msgs','readwrite');
+tx.objectStore('msgs').delete(k);
+tx.oncomplete=function(){db.close();res(true)};
+tx.onerror=function(){db.close();res(false)};
+tx.onabort=function(){db.close();res(false)}})}).catch(function(){return false})}
+function nbwDelMany(recs){
+if(!recs.length)return Promise.resolve(true);
+return nbwDb().then(function(db){
+return new Promise(function(res){
+var tx=db.transaction('msgs','readwrite'),st=tx.objectStore('msgs');
+recs.forEach(function(r){st.delete(r.k)});
+tx.oncomplete=function(){db.close();res(true)};
+tx.onerror=function(){db.close();res(false)};
+tx.onabort=function(){db.close();res(false)}})}).catch(function(){return false})}
+function nbwKeep(ch,keep){
+// keep only the newest `keep` records of this channel (0 = remove all)
+return nbwAll().then(function(all){
+var mine=all.filter(function(r){return r.ch===ch});
+mine.sort(function(a,b){return (b.ts||0)-(a.ts||0)});
+return nbwDelMany(mine.slice(keep))}).catch(function(){return false})}
+function nbwClearCh(ch){return nbwKeep(ch,0)}
+function nbwSweep(liveChs){
+// drop records of channels that are no longer on this device
+return nbwAll().then(function(all){
+return nbwDelMany(all.filter(function(r){return liveChs.indexOf(r.ch)<0}))})
+.catch(function(){return false})}
+"""
 
 # App mark: a white bell (notifications) with an amber wireless/broadcast signal
 # (top-right = "sent over the web / Web Push"), on the indigo brand gradient.
@@ -332,6 +420,40 @@ messages and all subscriptions are deleted on the server, and the channel disapp
 the app. It <strong>cannot remotely delete messages from other people's devices</strong>
 &mdash; each device keeps its own copy of notifications and messages it already received,
 until they are cleared there.</p>
+<label for="msg-store">Store messages on the server<span class="fn-mark">**</span>:</label>
+<select id="msg-store">
+<option value="off" selected>no &mdash; deliver as notifications only (default, most private)</option>
+<option value="max">yes &mdash; keep until pushed out (newest 50) or the channel ends</option>
+<option value="3600">yes &mdash; keep for 1 hour</option>
+<option value="86400">yes &mdash; keep for 1 day</option>
+<option value="604800">yes &mdash; keep for 1 week</option>
+<option value="2592000">yes &mdash; keep for 1 month</option>
+<option value="custom">yes &mdash; keep for a custom number of days&hellip;</option>
+</select>
+<input id="msg-store-days" type="number" min="1" max="3650" placeholder="Number of days (1&ndash;3650)" hidden>
+<details class="fn-note" id="store-note">
+<summary>** Should messages be stored on the server? Pros &amp; cons</summary>
+<p><strong>Stored on the server:</strong> every device sees the message history in the
+app; devices that were offline for more than a day, people who subscribe later, and
+reinstalls can catch up; long texts arrive in full; a message can be deleted for
+everyone at once. The content sits on this service's server until it expires.</p>
+<p><strong>Not stored (the default):</strong> most private &mdash; this service's server
+never keeps message content at rest; it only relays encrypted notifications. Each message
+then exists only on the devices that received it (and in the sender's own app).</p>
+<p><strong>Not stored &mdash; the honest costs:</strong> receiving requires notifications
+to be enabled; a device offline for more than ~24 hours, or someone who subscribes later,
+misses the message permanently; texts are bounded by the notification size (~1400
+characters); if the platform drops a notification, that copy is lost.</p>
+<p>Regardless of this setting, every notification travels through Apple's / Google's /
+your browser vendor's push servers, which queue it during delivery (typically up to ~24
+hours for offline devices) under their own policies &mdash; outside this service's
+control. The content is end-to-end encrypted, so those servers cannot read it.</p>
+<p>&#9888; Messages are also kept <strong>on each device</strong> that sent or received
+them (system notification center, the app's local message store, browser caches). To
+remove all messages from a device: use the browser's private/incognito mode from the
+start, remove the channel in the app, or clear this site's browsing data &mdash; and
+dismiss its notifications in the notification center.</p>
+</details>
 <button id="create-btn">Create channel</button>
 <p class="err" id="create-error"></p>
 <div id="create-result" hidden>
@@ -379,6 +501,13 @@ channel code can send.</p>
 <textarea id="send-body" maxlength="2000" rows="3" placeholder="Message text (optional if a title is given)"></textarea>
 <input id="send-url" maxlength="500" placeholder="Link https://… (optional)" autocomplete="off">
 <input id="send-password" maxlength="128" placeholder="Send password (only if the channel requires one)" autocomplete="off">
+<select id="send-store">
+<option value="" selected>Server storage for this message: channel default</option>
+<option value="off">Server storage: none (notification only)</option>
+<option value="86400">Server storage: 1 day</option>
+<option value="604800">Server storage: 1 week</option>
+<option value="max">Server storage: max (until pushed out / channel end)</option>
+</select>
 <button id="send-btn">Send message</button>
 <p class="err" id="send-error"></p>
 <p class="status-ok" id="send-ok" hidden></p>
@@ -413,11 +542,16 @@ the channel code is the only credential, no SDK or login needed.</p>
 <p class="muted">All are <code>POST</code> with a JSON body; the channel code goes in
 the body, never the URL.</p>
 <ul class="muted apilist">
-<li><code>/api/message</code> &mdash; send (title &le;120, body &le;2000, optional http(s) url &le;500)</li>
-<li><code>/api/messages</code> &mdash; recent messages + subscriber count</li>
+<li><code>/api/message</code> &mdash; send (title &le;120, body &le;2000, optional http(s) url &le;500;
+optional <code>store</code>: "off" | "max" | seconds &mdash; per-message override of the
+channel's server-storage setting)</li>
+<li><code>/api/messages</code> &mdash; channel info + subscriber count + the messages the
+channel stores on the server (empty for no-storage channels &mdash; the default)</li>
 <li><code>/api/channel</code> &mdash; create a channel (optional name, send_password,
 auto_remove_days 1&ndash;3650 &mdash; the end date is encoded into the code as
-<code>-expYYYYMMDD</code> and the channel deletes itself then)</li>
+<code>-expYYYYMMDD</code> and the channel deletes itself then; optional
+<code>message_store</code>: "off" (default &mdash; the server keeps no message content) |
+"max" | retention seconds)</li>
 <li><code>/api/channel/extend</code> &mdash; successor channel with a new end date
 (same name/password, messages carried over; optional notify)</li>
 <li><code>/api/subscribe</code> / <code>/api/unsubscribe</code> &mdash; register a device (used by the app)</li>
@@ -436,6 +570,7 @@ __DISCLAIMER__
 'use strict';
 var CODE_RE=/^[A-Za-z0-9_-]{16,64}$/;
 var codes=[];
+__NBW_DB__
 // Auto-remove: a '-expYYYYMMDD' suffix inside a code marks the channel's end
 // date (end of that UTC day) — parsed locally, no server round-trip needed.
 function codeExpiry(c){
@@ -504,6 +639,15 @@ $('#add-code').addEventListener('click',function(){
 if(addCode($('#code-input').value))$('#code-input').value=''});
 $('#code-input').addEventListener('keydown',function(e){
 if(e.key==='Enter'&&addCode($('#code-input').value))$('#code-input').value=''});
+var msSel=$('#msg-store'),msDays=$('#msg-store-days');
+msSel.addEventListener('change',function(){msDays.hidden=msSel.value!=='custom'});
+function msgStoreValue(){
+// 'off' | 'max' | retention seconds; NaN signals an invalid custom day count
+if(msSel.value==='custom'){
+var n=parseInt(msDays.value,10);
+return (n>=1&&n<=3650)?n*86400:NaN}
+if(msSel.value==='off'||msSel.value==='max')return msSel.value;
+return parseInt(msSel.value,10)}
 var arSel=$('#auto-remove'),arDays=$('#auto-remove-days'),arDate=$('#auto-remove-date');
 // whole days from today (UTC) until a calendar date 'YYYY-MM-DD' — the API is
 // days-based, and adding whole days to "now" lands exactly on the picked UTC day
@@ -535,10 +679,13 @@ if(days!==null&&isNaN(days)){
 $('#create-error').textContent=arSel.value==='date'
 ?'Expire date: pick a day from tomorrow up to 10 years ahead.'
 :'Auto-remove: enter a number of days between 1 and 3650.';return}
+var mstore=msgStoreValue();
+if(typeof mstore==='number'&&isNaN(mstore)){
+$('#create-error').textContent='Message storage: enter a number of days between 1 and 3650.';return}
 btn.disabled=true;
 $('#create-error').textContent='';
 api('/api/channel',{name:$('#channel-name').value,send_password:$('#channel-password').value,
-auto_remove_days:days}).then(function(j){
+auto_remove_days:days,message_store:mstore}).then(function(j){
 $('#new-code').textContent=j.code;
 $('#create-result').hidden=false;
 $('#create-protected').hidden=!j.send_protected;
@@ -575,13 +722,25 @@ var err=$('#send-error'),ok=$('#send-ok');err.textContent='';ok.hidden=true;
 if(!CODE_RE.test(code)){err.textContent='Enter a valid channel code (create one above, or paste it).';return}
 if(!title&&!$('#send-body').value.trim()){err.textContent='Enter a title or a message.';return}
 var btn=this;btn.disabled=true;
-api('/api/message',{code:code,title:title,body:$('#send-body').value,url:$('#send-url').value,send_password:$('#send-password').value})
+var payload={code:code,title:title,body:$('#send-body').value,url:$('#send-url').value,send_password:$('#send-password').value};
+var sst=$('#send-store');
+if(sst&&sst.value)payload.store=(sst.value==='off'||sst.value==='max')?sst.value:parseInt(sst.value,10);
+api('/api/message',payload)
 .then(function(j){
 $('#send-title').value='';$('#send-body').value='';$('#send-url').value='';
+// keep the sender's own copy on this device (the app page shows it), even
+// when the server stores nothing
+if(j.message&&window.crypto&&crypto.subtle&&window.indexedDB){
+chOf(code).then(function(ch){
+nbwAdd({k:ch+':'+j.message.id,ch:ch,id:j.message.id,ts:j.message.ts,
+title:j.message.title||'',body:j.message.body||'',url:j.message.url||'',name:''})
+.then(function(){return nbwKeep(ch,50)})}).catch(function(){})}
 var m;
-if(j.push_disabled)m='Stored. Push is not configured on this server.';
-else if(j.sent>0)m='Sent to '+j.sent+' device(s).';
-else m='Message stored, but no device is subscribed to this channel yet. Install the app on a phone and enable notifications to receive it.';
+if(j.push_disabled)m=(j.stored?'Stored. ':'')+'Push is not configured on this server.';
+else if(j.sent>0)m='Sent to '+j.sent+' device(s)'+(j.stored?'.':' (not stored on the server).');
+else m=(j.stored?'Message stored on the server, but no device is subscribed to this channel yet.'
+:'No device is subscribed to this channel yet \\u2014 nobody received this message (it is not stored on the server).')
++' Install the app on a phone and enable notifications to receive messages.';
 ok.textContent=m;ok.hidden=false})
 .catch(function(e){
 if(e&&e.status===403)err.textContent='This channel requires a valid send password.';
@@ -675,7 +834,7 @@ then open Notify from your Home Screen and enable notifications there.
 <h2>Notifications</h2>
 <div id="notif-state" class="muted">Notifications are off.</div>
 <button id="enable-btn">Enable notifications</button>
-<p id="notif-why" class="notif-why">&#9888; This turns on real <strong>system notifications</strong>: once enabled you receive messages <strong>even when this app and your browser are closed</strong>. Until you enable it, new messages only appear while this page is open.</p>
+<p id="notif-why" class="notif-why">&#9888; This turns on real <strong>system notifications</strong>: once enabled you receive messages <strong>even when this app and your browser are closed</strong>. Until you enable it, this device receives nothing &mdash; only messages a channel stores on the server appear while this page is open, and channels without server storage cannot be caught up later.</p>
 __COMPAT__
 </div>
 <div id="channels"></div>
@@ -716,6 +875,15 @@ return j})})}
 function lsGet(k,d){try{var v=JSON.parse(localStorage.getItem(k));
 return v==null?d:v}catch(e){return d}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+__NBW_DB__
+// code -> sha256(code)[:12] map: how push payloads ("ch") and the device-local
+// message store address a channel without ever carrying the code itself
+var chMap={};
+function buildChMap(){
+if(!(window.crypto&&crypto.subtle&&window.indexedDB))return Promise.resolve();
+return Promise.all(codes.map(function(c){
+if(chMap[c])return null;
+return chOf(c).then(function(h){chMap[c]=h})})).catch(function(){})}
 // Auto-remove: a '-expYYYYMMDD' suffix inside the code marks the channel's end
 // date (end of that UTC day). Parsed locally — no server needed, works offline
 // and even after the server data is already gone.
@@ -815,6 +983,9 @@ codes=stored;
 if(expired.length){
 expired.forEach(function(c){if(removedArr.indexOf(c)<0)removedArr.push(c)});
 lsSet(LS_REMOVED,removedArr);
+// purge the expired channels' device-local histories as well
+if(window.crypto&&crypto.subtle&&window.indexedDB)
+expired.forEach(function(c){chOf(c).then(nbwClearCh).catch(function(){})});
 noticeToast('Channel'+(expired.length>1?'s':'')+' expired',
 expired.map(function(c){return 'Ended on '+expiryLabel(c)}).join(', ')+
 ' \\u2014 removed from this device (auto-remove date reached).')}
@@ -1055,6 +1226,9 @@ var card=el('div','card channel');card.setAttribute('data-code',code);
 card.appendChild(el('h2','','\\u2026'));
 card.appendChild(el('div','muted stats',''));
 card.appendChild(el('div','channel-latest',''));
+var sh=el('div','store-hint',
+'\\uD83D\\uDD12 Messages are not stored on the server \\u2014 this list is this device\\u2019s own copy.');
+sh.hidden=true;card.appendChild(sh);
 var endLabel=expiryLabel(code);
 if(endLabel){
 var dl=expiryDaysLeft(code);
@@ -1090,20 +1264,39 @@ bo.maxLength=2000;bo.rows=3;
 var ur=el('input');ur.placeholder='Link https://\\u2026 (optional)';ur.maxLength=500;
 var pw=el('input');pw.placeholder='Send password (required for this channel)';
 pw.maxLength=128;pw.className='send-pw';pw.hidden=true;
+var sst=document.createElement('select');sst.className='send-store';
+[['','Server storage: channel default'],['off','Server storage: none (notification only)'],
+['86400','Server storage: 1 day'],['604800','Server storage: 1 week'],
+['max','Server storage: max (until pushed out / channel end)']]
+.forEach(function(o){var op=document.createElement('option');
+op.value=o[0];op.textContent=o[1];sst.appendChild(op)});
 var se=el('button','','Send');
 var serr=el('div','muted');
 se.addEventListener('click',function(){
 if(!ti.value.trim()&&!bo.value.trim()){serr.textContent='Enter a title or a message.';return}
 se.disabled=true;serr.textContent='';
-api('/api/message',{code:code,title:ti.value,body:bo.value,url:ur.value,send_password:pw.value})
+var body={code:code,title:ti.value,body:bo.value,url:ur.value,send_password:pw.value};
+if(sst.value)body.store=(sst.value==='off'||sst.value==='max')?sst.value:parseInt(sst.value,10);
+api('/api/message',body)
 .then(function(j){
 ti.value='';bo.value='';ur.value='';
-serr.textContent='Sent to '+j.sent+' device(s).';
-refreshChannel(code,true)})
+serr.textContent='Sent to '+j.sent+' device(s)'+(j.stored?'.':' (not stored on the server).');
+// local echo: the sender's own device keeps the full message even when the
+// server stores nothing; mark it seen so it never toasts at its author
+var ch=chMap[code];
+if(ch&&j.message){
+card.setAttribute('data-seen',j.message.id);
+nbwAdd({k:ch+':'+j.message.id,ch:ch,id:j.message.id,ts:j.message.ts,
+title:j.message.title||'',body:j.message.body||'',url:j.message.url||'',
+name:card.querySelector('h2').textContent||''})
+.then(function(){return nbwKeep(ch,50)})
+.then(function(){refreshChannel(code,true)})}
+else refreshChannel(code,true)})
 .catch(function(e){
 serr.textContent=(e&&e.status===403)?'This channel requires a valid send password.':('Error: '+e.message)})
 .then(function(){se.disabled=false})});
-d.appendChild(ti);d.appendChild(bo);d.appendChild(ur);d.appendChild(pw);d.appendChild(se);d.appendChild(serr);
+d.appendChild(ti);d.appendChild(bo);d.appendChild(ur);d.appendChild(pw);
+d.appendChild(sst);d.appendChild(se);d.appendChild(serr);
 card.appendChild(d);
 if(endLabel){
 // The end date is baked into the (hashed) code, so it cannot be changed in
@@ -1129,6 +1322,14 @@ edate.min=new Date(Date.now()+864e5).toISOString().slice(0,10);
 edate.max=new Date(Date.now()+3650*864e5).toISOString().slice(0,10);
 esel.addEventListener('change',function(){
 ecust.hidden=esel.value!=='custom';edate.hidden=esel.value!=='date'});
+var estore=document.createElement('select');estore.className='extend-store';
+[['','Message storage: keep this channel\\u2019s setting'],
+['off','Message storage: none (notifications only)'],
+['max','Message storage: until pushed out / channel end'],
+['86400','Message storage: 1 day'],['604800','Message storage: 1 week'],
+['2592000','Message storage: 1 month']]
+.forEach(function(o){var op=document.createElement('option');
+op.value=o[0];op.textContent=o[1];estore.appendChild(op)});
 var enot=document.createElement('label');enot.className='muted extend-notify';
 var echk=document.createElement('input');echk.type='checkbox';echk.checked=true;
 enot.appendChild(echk);
@@ -1146,19 +1347,35 @@ if(!(days>=1&&days<=3650)){
 eerr.textContent='Pick a day from tomorrow up to 10 years ahead.';return}}
 else if(esel.value)days=parseInt(esel.value,10);
 ego.disabled=true;eerr.textContent='Creating the extended channel\\u2026';
-api('/api/channel/extend',{code:code,auto_remove_days:days,notify:echk.checked,
-send_password:deletePw(card)})
+var xb={code:code,auto_remove_days:days,notify:echk.checked,
+send_password:deletePw(card)};
+if(estore.value)xb.message_store=(estore.value==='off'||estore.value==='max')
+?estore.value:parseInt(estore.value,10);
+api('/api/channel/extend',xb)
 .then(function(j){
+// move this device's local history to the successor BEFORE removing the old
+// channel (removeChannel purges the old records)
+var oldCh=chMap[code];
+var refile=(oldCh&&window.indexedDB)?chOf(j.code).then(function(newCh){
+chMap[j.code]=newCh;
+return nbwAll().then(function(all){
+return Promise.all(all.filter(function(r){return r.ch===oldCh})
+.map(function(r){return nbwAdd({k:newCh+':'+r.id,ch:newCh,id:r.id,ts:r.ts,
+title:r.title,body:r.body,url:r.url,name:r.name})}))})}).catch(function(){})
+:Promise.resolve();
+refile.then(function(){
 addChannel(j.code);
 removeChannel(code);
 noticeToast('Channel extended',
 'Share the NEW QR code / link'+(j.expires?' \\u2014 the new channel ends on '+expiryLabel(j.code):' \\u2014 the new channel has no end date')+'. '
-+j.messages_copied+' message(s) were carried over; the old channel still stops on '+endLabel+'.')})
++(j.messages_copied?j.messages_copied+' server-stored message(s) carried over. ':'')
++'This device\\u2019s message history moved to the new card; the old channel still stops on '+endLabel+'.')})})
 .catch(function(e){
 eerr.textContent=(e&&e.status===403)?'This channel requires a valid send password.'
 :('Could not extend: '+(e.message||'error'));
 ego.disabled=false})});
-ext.appendChild(esel);ext.appendChild(ecust);ext.appendChild(edate);ext.appendChild(enot);
+ext.appendChild(esel);ext.appendChild(ecust);ext.appendChild(edate);
+ext.appendChild(estore);ext.appendChild(enot);
 ext.appendChild(ego);ext.appendChild(eerr);
 card.appendChild(ext)}
 var row=el('div','row');
@@ -1204,6 +1421,24 @@ if(!v&&card.getAttribute('data-protected')==='1'){
 v=prompt('This channel needs its send password to delete messages:')||''}
 return v}
 
+// Merge the server-stored messages (empty for no-storage channels) with this
+// device's local history (IndexedDB, fed by pushes + own sends). Dedup by
+// message id — the server copy wins (it is never byte-truncated). Returns
+// {list, server} where `server` marks ids that exist server-side (those can
+// be deleted "for everyone"; local-only ones just on this device).
+function mergeMsgs(code,serverMsgs){
+var server={};serverMsgs.forEach(function(m){server[m.id]=1});
+var base=serverMsgs.slice();
+var ch=chMap[code];
+if(!ch||!window.indexedDB)return Promise.resolve({list:base,server:server});
+return nbwAll().then(function(all){
+all.forEach(function(r){
+if(r.ch===ch&&!server[r.id])
+base.push({id:r.id,ts:r.ts,title:r.title,body:r.body,url:r.url})});
+base.sort(function(a,b){return (b.ts||0)-(a.ts||0)});
+return {list:base.slice(0,50),server:server}})
+.catch(function(){return {list:base,server:server}})}
+
 function refreshChannel(code,silent){
 var card=document.querySelector('.channel[data-code="'+code+'"]');
 if(!card)return;
@@ -1218,14 +1453,21 @@ var _pw=card.querySelector('.send-pw');if(_pw)_pw.hidden=!prot;
 var _sum=card.querySelector('.send-details summary');
 if(_sum)_sum.textContent=prot?'Send a message (password required)':'Send a message';
 card.querySelector('.stats').textContent=j.subscribers+' subscribed device(s)';
-var latest=(j.messages[0]&&j.messages[0].ts)||j.channel.created||0;
+// message-storage mode: 0=off (anonymous default), -1=max, >0 retention secs
+var msgStore=(j.channel&&j.channel.message_store!==undefined&&j.channel.message_store!==null)
+?j.channel.message_store:-1;
+card.setAttribute('data-store',String(msgStore));
+var hint=card.querySelector('.store-hint');if(hint)hint.hidden=msgStore!==0;
+return mergeMsgs(code,j.messages||[]).then(function(mm){
+var list=mm.list,serverIds=mm.server;
+var latest=(list[0]&&list[0].ts)||j.channel.created||0;
 card.setAttribute('data-ts',String(latest));
 if(latest){var lt=fmtTime(latest);
 card.querySelector('.channel-latest').textContent='Latest: '+lt.abs+' \\u00b7 '+lt.rel}
 sortChannels();
 // in-app "new message" sign: only for genuinely NEW arrivals — never the first
 // baseline load, the user's own send/delete (which pass silent), or muted channels
-var newestId=j.messages[0]?j.messages[0].id:'';
+var newestId=list[0]?list[0].id:'';
 var seen=card.getAttribute('data-seen');
 if(seen===null){card.setAttribute('data-seen',newestId)}
 else if(newestId&&newestId!==seen){
@@ -1233,36 +1475,51 @@ if(!silent){
 // highlight this recent arrival (at most one per channel — the newest)
 card.setAttribute('data-newid',newestId);
 if(!isMuted(code)){
-var idx=j.messages.map(function(m){return m.id}).indexOf(seen);
-var nnew=(idx>=1)?idx:1;var top=j.messages[0];
+var idx=list.map(function(m){return m.id}).indexOf(seen);
+var nnew=(idx>=1)?idx:1;var top=list[0];
 showToast(code,cname,top,nnew>1?(' (+'+(nnew-1)+' more)'):'')}}
 card.setAttribute('data-seen',newestId)}
 // only rebuild the message list when it actually changed (no flicker / no
 // collapsing the "More" expander on every poll)
-var sig=j.messages.map(function(m){return m.id+':'+m.ts}).join(',');
+var sig=list.map(function(m){return m.id+':'+m.ts}).join(',');
 if(card.getAttribute('data-msgsig')===sig)return;
 card.setAttribute('data-msgsig',sig);
 var hlId=card.getAttribute('data-newid');  // the one message to highlight
+// deleting = always this device's copy; additionally the server copy when one
+// exists (that removes it from every device's future merge — password-gated)
+function delLocal(id){var ch=chMap[code];
+return ch?nbwDel(ch+':'+id):Promise.resolve()}
+function clearServer(keep){
+if(msgStore===0&&!Object.keys(serverIds).length)return Promise.resolve();
+return api('/api/messages/clear',
+keep?{code:code,keep:keep,send_password:deletePw(card)}
+:{code:code,send_password:deletePw(card)})}
 var msgs=card.querySelector('.msgs');msgs.textContent='';
-if(!j.messages.length){msgs.appendChild(el('div','muted','No messages yet.'))}
+if(!list.length){msgs.appendChild(el('div','muted','No messages yet.'))}
 else{
 var hdr=el('div','msgs-hdr');
-hdr.appendChild(el('span','msgs-hint',j.messages.length>1?'Newest first':''));
+hdr.appendChild(el('span','msgs-hint',list.length>1?'Newest first':''));
 var clr=el('button','iconbtn','\\uD83D\\uDDD1');
 clr.title='Delete all messages';clr.setAttribute('aria-label','Delete all messages');
 clr.addEventListener('click',function(){
 if(!confirm('Delete ALL messages in this channel? This cannot be undone.'))return;
-api('/api/messages/clear',{code:code,send_password:deletePw(card)})
+clearServer(0).then(function(){var ch=chMap[code];
+return ch?nbwClearCh(ch):Promise.resolve()})
 .then(function(){refreshChannel(code,true)})
 .catch(function(e){alert((e&&e.status===403)?'Wrong or missing send password.':'Could not delete messages.')})});
 hdr.appendChild(clr);msgs.appendChild(hdr)}
 function mkMsg(m){
 var d=el('div','msg'+(m.id===hlId?' msg-new':''));
 var del=el('button','iconbtn msg-del','\\uD83D\\uDDD1');
-del.title='Delete this message';del.setAttribute('aria-label','Delete this message');
+var onServer=!!serverIds[m.id];
+del.title=onServer?'Delete this message (for everyone)':'Delete this message on this device';
+del.setAttribute('aria-label',del.title);
 del.addEventListener('click',function(){
-if(!confirm('Delete this message?'))return;
-api('/api/message/delete',{code:code,id:m.id,send_password:deletePw(card)})
+if(!confirm(onServer?'Delete this message? (removes it from the server for everyone)'
+:'Delete this message on this device?'))return;
+(onServer?api('/api/message/delete',{code:code,id:m.id,send_password:deletePw(card)})
+:Promise.resolve())
+.then(function(){return delLocal(m.id)})
 .then(function(){refreshChannel(code,true)})
 .catch(function(e){alert((e&&e.status===403)?'Wrong or missing send password.':'Could not delete message.')})});
 d.appendChild(del);
@@ -1281,28 +1538,24 @@ var a=el('a','','Open link');a.href=m.url;a.target='_blank';a.rel='noopener nore
 lk.appendChild(a);d.appendChild(lk)}
 return d}
 var VIS=3;
-j.messages.slice(0,VIS).forEach(function(m){msgs.appendChild(mkMsg(m))});
-if(j.messages.length>VIS){
+list.slice(0,VIS).forEach(function(m){msgs.appendChild(mkMsg(m))});
+if(list.length>VIS){
 var more=document.createElement('details');more.className='more-msgs';
-more.appendChild(el('summary','','More \\u2026 ('+(j.messages.length-VIS)+' older)'));
+more.appendChild(el('summary','','More \\u2026 ('+(list.length-VIS)+' older)'));
 var oh=el('div','msgs-hdr');
 oh.appendChild(el('span','msgs-hint','Older messages'));
 var delOld=el('button','iconbtn','\\uD83D\\uDDD1');
 delOld.title='Delete all older messages';delOld.setAttribute('aria-label','Delete all older messages');
 delOld.addEventListener('click',function(){
 if(!confirm('Delete all older messages? (keeps the newest '+VIS+')'))return;
-api('/api/messages/clear',{code:code,keep:VIS,send_password:deletePw(card)})
+clearServer(VIS).then(function(){var ch=chMap[code];
+return ch?nbwKeep(ch,VIS):Promise.resolve()})
 .then(function(){refreshChannel(code,true)})
 .catch(function(e){alert((e&&e.status===403)?'Wrong or missing send password.':'Could not delete messages.')})});
 oh.appendChild(delOld);more.appendChild(oh);
-j.messages.slice(VIS).forEach(function(m){more.appendChild(mkMsg(m))});
+list.slice(VIS).forEach(function(m){more.appendChild(mkMsg(m))});
 msgs.appendChild(more)}
-var latest=(j.messages[0]&&j.messages[0].ts)||j.channel.created||0;
-card.setAttribute('data-ts',String(latest));
-if(latest){var lt=fmtTime(latest);
-card.querySelector('.channel-latest').textContent='Latest: '+lt.abs+' \\u00b7 '+lt.rel}
-sortChannels();
-}).catch(function(e){
+})}).catch(function(e){
 if(e&&e.status===404){
 card.querySelector('h2').textContent='Unknown channel';
 card.querySelector('.stats').textContent=
@@ -1318,7 +1571,8 @@ if(codes.indexOf(code)>=0)return;
 codes.push(code);lsSet(LS_CODES,codes);
 lsSet(LS_REMOVED,lsGet(LS_REMOVED,[]).filter(function(x){return x!==code}));
 mirrorSavedStore();
-renderChannels();injectManifest();mirrorStateForSW();
+buildChMap().then(renderChannels);
+injectManifest();mirrorStateForSW();
 if(lsGet(LS_SUB,false))ensureSubscribed(false)}
 
 function queuePendingUnsub(code,endpoint){
@@ -1337,6 +1591,8 @@ var removedArr=lsGet(LS_REMOVED,[]);
 if(removedArr.indexOf(code)<0)removedArr.push(code);
 lsSet(LS_REMOVED,removedArr);
 mirrorSavedStore();
+// drop this channel's device-local message history too
+if(chMap[code]){nbwClearCh(chMap[code]);delete chMap[code]}
 if('serviceWorker' in navigator){
 navigator.serviceWorker.ready.then(function(r){
 return r.pushManager.getSubscription()}).then(function(s){
@@ -1359,7 +1615,7 @@ $('#enable-btn').addEventListener('click',function(){
 // never leave the UI stuck on "Enabling…" or a bare error line
 ensureSubscribed(true).catch(function(){updateNotifUI('subfail')})});
 window.addEventListener('hashchange',function(){
-loadCodes();renderChannels();injectManifest();mirrorStateForSW();
+loadCodes();buildChMap().then(renderChannels);injectManifest();mirrorStateForSW();
 if(lsGet(LS_SUB,false))ensureSubscribed(false)});
 window.addEventListener('online',drainPendingUnsub);
 
@@ -1376,15 +1632,22 @@ if(document.visibilityState==='visible')pollAll()});
 // ------- init
 loadCodes();
 injectManifest();
+buildChMap().then(function(){
 renderChannels();
+// prune local history of channels no longer on this device (incl. ones
+// removed on the landing page) — ONLY once the full map is built, so a
+// missing crypto.subtle can never wipe live history
+if(!codes.length||codes.every(function(c){return chMap[c]}))
+nbwSweep(codes.map(function(c){return chMap[c]}).filter(Boolean))});
 mirrorStateForSW();
 drainPendingUnsub();
 startPolling();
 if('serviceWorker' in navigator){
 navigator.serviceWorker.register('/sw.js').catch(function(){});
-// instant refresh when a push arrives (the SW pings open tabs)
+// instant refresh when a push arrives (the SW pings open tabs; 'nbw-refresh'
+// is the legacy ping of an older SW, 'nbw-push' the current one)
 navigator.serviceWorker.addEventListener('message',function(e){
-if(e.data&&e.data.type==='nbw-refresh')pollAll()})}
+if(e.data&&(e.data.type==='nbw-refresh'||e.data.type==='nbw-push'))pollAll()})}
 if(isIOS()&&!isStandalone()){$('#ios-hint').hidden=false}
 applyCompat();
 if(pushSupported()&&Notification.permission==='granted'&&lsGet(LS_SUB,false)){
@@ -1411,7 +1674,7 @@ else if(Notification.permission==='denied')updateNotifUI('blocked')}}).catch(fun
 
 # -------------------------------------------------------- service worker
 
-SW_JS = """'use strict';
+_SW_JS_TEMPLATE = """'use strict';
 var CACHE='nbw-v1';
 var SHELL=['/a','/icon-192.png','/icon.svg'];
 
@@ -1422,6 +1685,7 @@ var a=new Uint8Array(b.length);
 for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);
 return a}
 
+__NBW_DB__
 // auto-remove: a '-expYYYYMMDD' code suffix marks the end of that UTC day
 function swCodeExpired(code){
 var m=/-exp([0-9]{8})$/.exec(code||'');
@@ -1478,6 +1742,9 @@ body:'This channel reached its auto-remove date and was removed.',
 icon:'/icon-192.png',badge:'/badge.png',tag:d.tag||'nbw-expired',
 data:{url:'/a'}}),
 dropExpiredFromMirror(),
+// purge the expired channel's device-local history too — the tombstone flow
+// must not resurrect its messages from IndexedDB
+d.ch?nbwClearCh(d.ch).catch(function(){}):Promise.resolve(),
 self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){
 cs.forEach(function(c){c.postMessage({type:'nbw-refresh'})})})]));
 return}
@@ -1496,9 +1763,20 @@ timestamp:d.ts?d.ts*1000:Date.now()};
 if(d.tag)opts.tag=d.tag;
 e.waitUntil(Promise.all([
 self.registration.showNotification(title,opts),
+// device-local history: file the message under its channel (ch = kh prefix
+// from the encrypted payload). Best effort — a storage failure must never
+// block the notification itself.
+swStoreMsg(d),
 // ping open tabs so the in-app message list refreshes instantly
 self.clients.matchAll({type:'window',includeUncontrolled:true}).then(function(cs){
-cs.forEach(function(c){c.postMessage({type:'nbw-refresh'})})})]))});
+cs.forEach(function(c){c.postMessage({type:'nbw-push',ch:d.ch||''})})})]))});
+
+function swStoreMsg(d){
+if(!d.ch||!d.tag)return Promise.resolve();
+return nbwAdd({k:d.ch+':'+d.tag,ch:d.ch,id:d.tag,
+ts:d.ts||Math.round(Date.now()/1000),
+title:d.title||'',body:d.body||'',url:d.url||'',name:d.channel||''})
+.then(function(){return nbwKeep(d.ch,50)}).catch(function(){})}
 
 self.addEventListener('notificationclick',function(e){
 e.notification.close();
@@ -1537,6 +1815,8 @@ body:JSON.stringify({code:code,subscription:body})}).catch(function(){})}))})})
 .catch(function(){}))});
 """
 
+SW_JS = _SW_JS_TEMPLATE.replace("__NBW_DB__", _NBW_DB_JS)
+
 
 def index_html() -> str:
     # On the landing page the compatibility list is expanded by default so the
@@ -1545,8 +1825,10 @@ def index_html() -> str:
     compat_open = COMPAT_HTML.replace(
         '<details class="compat">', '<details class="compat" open>'
     )
-    return INDEX_HTML.replace("__DISCLAIMER__", DISCLAIMER_HTML).replace(
-        "__COMPAT__", compat_open
+    return (
+        INDEX_HTML.replace("__DISCLAIMER__", DISCLAIMER_HTML)
+        .replace("__COMPAT__", compat_open)
+        .replace("__NBW_DB__", _NBW_DB_JS)
     )
 
 
@@ -1556,4 +1838,5 @@ def app_html(vapid_public_key: str) -> str:
         _APP_HTML_TEMPLATE.replace("__VAPID_PUBLIC_KEY__", key)
         .replace("__DISCLAIMER__", DISCLAIMER_HTML)
         .replace("__COMPAT__", COMPAT_HTML)
+        .replace("__NBW_DB__", _NBW_DB_JS)
     )

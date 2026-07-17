@@ -62,13 +62,36 @@ and in README.md; keep all three in sync.
   channel → endpoints.
 - **Message** = optional title (≤120) + optional body (≤2000) + optional http(s) url
   (≤500). At least one of title/body is required; a missing title is derived from the
-  body's first line (first `TITLE_SNIPPET`=60 chars + "…"). Stored per channel (newest
-  first, capped at `NBW_MAX_MESSAGES`=50) and pushed to all subscribers.
-  The full title+body is always stored, but **every display surface de-duplicates**: the
-  in-app message list, the new-message toast, and the browser push notification render the
-  body only when it differs from the title — so a body-only short message (whose derived
-  title equals the body) shows once, never "Hi / Hi". (Dedup is at the display layer, in JS;
-  the server derivation is unchanged.)
+  body's first line (first `TITLE_SNIPPET`=60 chars + "…"). Always pushed to all
+  subscribers; **server-side storage is OPT-IN (anonymous by default)**, see next bullet.
+  **Every display surface de-duplicates**: the in-app message list, the new-message
+  toast, and the browser push notification render the body only when it differs from the
+  title — so a body-only short message (whose derived title equals the body) shows once,
+  never "Hi / Hi". (Dedup is at the display layer, in JS; the derivation is unchanged.)
+- **Message storage (opt-in, default OFF)**: channel meta `msg_store` — set via
+  `message_store` on `/api/channel` (+`/api/channel/extend`): `"off"`/0 = the server
+  stores NO message content (pure relay — the DEFAULT for new channels), `"max"`/-1 =
+  keep until pushed out of the newest-`NBW_MAX_MESSAGES`=50 / channel end (the legacy
+  behavior; channels whose meta predates the setting keep it — no migration), or
+  retention seconds (60 … 3650 d). `/api/message` accepts a per-message `store` override
+  (same values, any code-holder). Retention > 0 stamps `expires_at` into the stored JSON;
+  Redis lists have no per-element TTL, so expired messages are **filtered on read**
+  (`channel_snapshot`) and **physically pruned on write** (`_prune_expired_messages`,
+  one LREM pipeline). `publish()` returns `stored` true/false and ALWAYS returns
+  `message` (it feeds the sender's local echo). Snapshots expose
+  `channel.message_store` so the UIs render hints (the card's `.store-hint`).
+- **Device-local message history (ALWAYS on — the only record for no-storage
+  messages)**: every push payload carries `"ch"` = `sha256(code)[:12]` (inside the
+  E2E-encrypted payload only — computable offline from the code, gives a recipient
+  nothing new, never in URLs). The SW files each push into **IndexedDB** (db `nbw`,
+  store `msgs`, keyPath `k = ch+':'+id`, helpers in `_NBW_DB_JS` spliced into BOTH pages
+  + the SW via `__NBW_DB__`), capped 50/channel, and pings tabs with
+  `{type:'nbw-push'}`. The page merges local + server-stored messages
+  (`mergeMsgs`, dedup by id — the server copy wins), and on send writes the sender's
+  own **echo** (full-length) locally; IDB `add()` (never `put()`) makes the first write
+  win, so the echo is not clobbered by its own truncated push copy. Local history is
+  purged with the channel (remove/expiry/extend-re-key to the successor) and swept for
+  codes no longer on the device — only after the full code→ch map is built.
 - **Send-password (optional)**: a channel may set a send-password at creation; only its
   `sha256` hash is stored in the channel meta (`send_pw`) — never the raw phrase. When set,
   publishing requires the matching password (constant-time compare → `SendForbidden`/403
@@ -76,12 +99,15 @@ and in README.md; keep all three in sync.
   snapshots expose `send_protected` so the send UIs show a password field only when needed.
   `/api/channel` accepts `send_password` (min 4, max 128); `/api/message` accepts it too.
 - **Deleting messages**: `/api/message/delete` (one, by message `id`) and
-  `/api/messages/clear` (all, or all-but-newest via optional `keep`) — gated by the same
-  send-password when the channel is protected (`_require_send_password`, shared with
-  publish). App page: a trash icon per message, a clear-all trash in the message header,
-  and — when a channel has >3 messages — the 4th-and-older go into a collapsed
-  "More … (N older)" expander with its own single "delete older" trash (`keep=3`, Redis
-  `LTRIM`). On a protected channel the UI reuses the send-password field or prompts for it.
+  `/api/messages/clear` (all, or all-but-newest via optional `keep`) operate on
+  SERVER-stored messages — gated by the send-password when the channel is protected
+  (`_require_send_password`, shared with publish). App page: a trash icon per message, a
+  clear-all trash in the message header, and — when a channel has >3 messages — the
+  4th-and-older go into a collapsed "More … (N older)" expander with its own single
+  "delete older" trash. The trash actions ALWAYS delete the device-local copy; when the
+  message also exists server-side they additionally call the API (confirm text says
+  "for everyone" vs "on this device"). On a protected channel the UI reuses the
+  send-password field or prompts for it (server deletes only — local deletes need none).
 
 ## Install-URL trick (core UX idea — the app URL carries the channel codes)
 
@@ -202,7 +228,9 @@ Users trust that saved channels persist locally; losing that state loses their c
   Env: `KV_REST_API_URL`/`KV_REST_API_TOKEN` (Vercel Marketplace “Upstash for Redis”) or
   `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN`.
   Keys: `nbw:meta:{kh}` (JSON string, `SET NX EX`), `nbw:subs:{kh}` (hash eh→sub JSON),
-  `nbw:msgs:{kh}` (list, `LPUSH`+`LTRIM`). All keys get TTL `NBW_CHANNEL_TTL_DAYS`=400,
+  `nbw:msgs:{kh}` (list, `LPUSH`+`LTRIM` — exists ONLY for channels/messages that opted
+  into server storage; the anonymous default writes no message content at all). All keys
+  get TTL `NBW_CHANNEL_TTL_DAYS`=400 (capped at the channel's auto-remove date),
   refreshed on activity → dead channels expire by themselves.
 - `MemoryStorage`: used automatically when no Redis env is set (tests/local dev; on
   Vercel it would be per-instance only — configure Redis for real deployments).
@@ -266,20 +294,29 @@ Users trust that saved channels persist locally; losing that state loses their c
   message links open in a new window (don’t destroy the app tab); `pushsubscriptionchange`
   → re-subscribe + re-POST `/api/subscribe` for the codes mirrored into a Cache entry
   (`/__nbw_state`, SWs can’t read localStorage), **skipping expired codes**; tiny app-shell
-  cache network-first. A push that arrives AFTER its channel's auto-remove date (payload
-  `exp`, sent while the channel was alive, delivered up to `ttl=86400` late) does NOT show
-  the message: the SW shows a one-time **"Channel expired"** notice instead
-  (`userVisibleOnly` requires some notification) and drops the code from `/__nbw_state`.
-- **Live app-page updates (works with notifications OFF — required)**: `/a` polls every
-  channel via `/api/messages` every `POLL_MS`=12s while the tab is visible (guarded by
-  `visibilitychange`; overridable in tests via `window.__NBW_POLL_MS`), plus an instant
-  refresh on the SW `nbw-refresh` message. `refreshChannel(code, silent)` only rebuilds the
-  DOM when the message set actually changed (`data-msgsig`), so no flicker / no collapsing
+  cache network-first. The SW also **files every push into the device-local IndexedDB
+  history** (`swStoreMsg`, keyed by the payload's `ch`) before pinging tabs
+  (`{type:'nbw-push'}`; the page also accepts the legacy `nbw-refresh`). A push that
+  arrives AFTER its channel's auto-remove date (payload `exp`, sent while the channel was
+  alive, delivered up to `ttl=86400` late) does NOT show the message: the SW shows a
+  one-time **"Channel expired"** notice instead (`userVisibleOnly` requires some
+  notification), drops the code from `/__nbw_state` AND purges that channel's local
+  history (`nbwClearCh`).
+- **Live app-page updates**: `/a` polls every channel via `/api/messages` every
+  `POLL_MS`=12s while the tab is visible (guarded by `visibilitychange`; overridable in
+  tests via `window.__NBW_POLL_MS`), plus an instant refresh on the SW ping. Each tick
+  refreshes channel meta (name/subscribers/protected/expiry/storage-mode) and re-renders
+  the MERGED message list (server-stored + device-local). NOTE the deliberate change from
+  the earlier "works with notifications OFF" invariant: with the anonymous no-storage
+  default, a device without notification permission receives NOTHING — the poll can only
+  surface messages a channel stores on the server (plus this device's own echoes); the
+  `#notif-why` card copy states this. `refreshChannel(code, silent)` only rebuilds the
+  DOM when the merged set actually changed (`data-msgsig`), so no flicker / no collapsing
   the “More” expander. A genuinely NEW arrival (not the first baseline, not the user’s own
-  send/delete which pass `silent`, not muted channels) shows an in-app **toast** (“New
-  message in <channel>: title / body”) with **Go to channel / Reply / Delete** actions, and
-  **highlights** that message (`.msg-new` + NEW badge) — at most one highlight per channel
-  (`data-newid`, the newest arrival).
+  send/delete which pass `silent`/`data-seen`, not muted channels) shows an in-app
+  **toast** (“New message in <channel>: title / body”) with **Go to channel / Reply /
+  Delete** actions, and **highlights** that message (`.msg-new` + NEW badge) — at most one
+  highlight per channel (`data-newid`, the newest arrival).
 
 ## Security & operations requirements
 
@@ -323,7 +360,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 209 tests
+## Tests (pytest; must be green before every deploy) — 222 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends
@@ -331,14 +368,23 @@ Users trust that saved channels persist locally; losing that state loses their c
   suffix round-trip + invalid-suffix = never, `auto_remove_days` validation, tampered
   suffix = different hash → unknown, storage TTL capped at the end date, expired channel
   gone on every path (patched clock), extend copies meta/messages/protection with the
-  migration push carrying the new code ONLY in the payload (never in storage).
+  migration push carrying the new code ONLY in the payload (never in storage). Message
+  storage: `validate_message_store`, default channel stores nothing (response still
+  carries `message` for the echo), per-message override both directions, retention
+  expiry filtered-on-read + pruned-on-write (patched clock), meta without `msg_store`
+  ⇒ legacy keep-max, extend inherits the setting, payload `ch` = kh prefix.
 - `tests/test_api.py` — integration: the real handler on a local port, in-memory storage,
   monkeypatched `webpush` capture; happy path + error/cap/prune/rate-limit + channel-create
   soft cap + oversized-body drain + CSP directive + StorageError→502 + security headers +
   the no-logging guarantee + static assets (incl. `/badge.png` served with an alpha channel
   so the Android notification icon is not a white square, and the `/icon.svg` amber accent)
   + auto-remove (`auto_remove_days` on create incl. 400s, `expires` in create/snapshot
-  responses, `/api/channel/extend` round-trip, expired channel → 404 everywhere).
+  responses, `/api/channel/extend` round-trip, expired channel → 404 everywhere)
+  + message storage (`message_store` on create, default → `stored:false` + empty
+  snapshot + payload `ch`, per-message `store` override, retention `expires_at`, 400s).
+  The shared `channel` fixture opts into `message_store:"max"` (legacy behavior) so
+  storage-dependent tests keep exercising the stored path; the anonymous default has its
+  own tests.
 - `tests/test_storage_http.py` — the real `RedisStorage` HTTP layer against a fake Upstash
   REST server (request shape, Bearer auth, `/pipeline`, per-command error, non-JSON, refused
   connection → `StorageError`).
@@ -361,14 +407,20 @@ Users trust that saved channels persist locally; losing that state loses their c
   result / QR / code list + custom-days validation), the channel-card expiry badge +
   share-block "Ends on", the extend flow (successor card carries the messages, old code
   tombstoned, toast), an expired fragment code tombstoned with a notice + rejected on
-  paste, and the `/` redirect skipping expired codes.
+  paste, the `/` redirect skipping expired codes, and message storage: the default
+  channel's `.store-hint` + sender echo rendering/surviving reload with `/api/messages`
+  empty + local delete, the local/server merge deduping by id, and the create-form
+  storage select + pros/cons explainer (incl. the platform-transport and local-device
+  disclosures).
 - `tests/test_ui_notifications.py` + `tests/uikit.py` — **HEADED** Chromium (headless denies
   notification permission): delivers a real push into the SW via CDP
   `ServiceWorker.deliverPushMessage` and asserts the displayed notification’s
   title/body/tag/click-url/**badge** (incl. the title==body de-dup → empty notification body,
   and `badge` = `/badge.png` so the Android status-bar icon isn’t a white square), plus the
   **expired-push replacement** (past `exp` → "Channel expired" notice, never the message
-  content; future `exp` → shown normally);
+  content; future `exp` → shown normally), the **device-local history**: two quick pushes
+  BOTH land in IndexedDB (keyed records — no lost write) and render in the open tab, and
+  an expired push purges the channel's local records;
   incl. a Pixel device-emulation run (Android = Chrome).
 - `tests/test_ui_platforms.py` — iOS Safari-tab emulation (Push APIs stripped → install
   banner, enable hidden), iOS installed-standalone emulation (fake push stack → subscribe

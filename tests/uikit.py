@@ -48,6 +48,66 @@ def deliver_push(page, base: str, payload: dict) -> None:
         session.detach()
 
 
+def ch_of(code: str) -> str:
+    """The channel id prefix used by push payloads and the device-local
+    message store: sha256(code) first 12 hex chars (mirrors the client)."""
+    import hashlib
+
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:12]
+
+
+_IDB_ALL_JS = """() => new Promise(res => {
+    const rq = indexedDB.open('nbw', 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore('msgs', {keyPath: 'k'});
+    rq.onsuccess = () => {
+        const db = rq.result;
+        const q = db.transaction('msgs', 'readonly').objectStore('msgs').getAll();
+        q.onsuccess = () => { db.close(); res(q.result || []); };
+        q.onerror = () => { db.close(); res([]); };
+    };
+    rq.onerror = () => res([]);
+})"""
+
+
+def idb_all(page):
+    """All records in the page's device-local message store (IndexedDB)."""
+    return page.evaluate(_IDB_ALL_JS)
+
+
+def seed_local(page, ch: str, msgs: list) -> None:
+    """Insert message records directly into the device-local store.
+    Each msg needs id/ts/title (body/url/name optional)."""
+    records = [
+        {
+            "k": f"{ch}:{m['id']}",
+            "ch": ch,
+            "id": m["id"],
+            "ts": m["ts"],
+            "title": m.get("title", ""),
+            "body": m.get("body", ""),
+            "url": m.get("url", ""),
+            "name": m.get("name", ""),
+        }
+        for m in msgs
+    ]
+    page.evaluate(
+        """(records) => new Promise(res => {
+        const rq = indexedDB.open('nbw', 1);
+        rq.onupgradeneeded = () => rq.result.createObjectStore('msgs', {keyPath: 'k'});
+        rq.onsuccess = () => {
+            const db = rq.result;
+            const tx = db.transaction('msgs', 'readwrite');
+            const st = tx.objectStore('msgs');
+            records.forEach(r => { try { st.put(r); } catch (e) {} });
+            tx.oncomplete = () => { db.close(); res(true); };
+            tx.onerror = () => { db.close(); res(false); };
+        };
+        rq.onerror = () => res(false);
+    })""",
+        records,
+    )
+
+
 def get_notifications(page):
     return page.evaluate(
         """async () => {

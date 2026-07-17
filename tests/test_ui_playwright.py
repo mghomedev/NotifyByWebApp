@@ -69,6 +69,8 @@ def test_landing_create_channel_and_build_link(server, page):
 def test_landing_send_message_and_autosave(server, page):
     page.goto(server.base + "/")
     page.fill("#channel-name", "Send UI")
+    # opt into server-side message storage via the new select (default is off)
+    page.select_option("#msg-store", "max")
     page.click("#create-btn")
     page.wait_for_selector("#create-result:not([hidden])")
     code = page.text_content("#new-code").strip()
@@ -548,9 +550,10 @@ def test_landing_create_with_auto_remove(server, page):
 def test_app_page_expiry_badge_and_extend_flow(server, page):
     from datetime import datetime, timedelta, timezone
 
-    code = server.post("/api/channel", {"name": "Ending", "auto_remove_days": 30}).json[
-        "code"
-    ]
+    code = server.post(
+        "/api/channel",
+        {"name": "Ending", "auto_remove_days": 30, "message_store": "max"},
+    ).json["code"]
     server.post("/api/message", {"code": code, "title": "carry me"})
     page.goto(server.base + "/a#codes=" + code)
     page.wait_for_selector(".channel .expiry")
@@ -639,6 +642,90 @@ def test_landing_redirect_skips_expired_codes(server, page):
     page.goto(server.base + "/", wait_until="commit")
     page.wait_for_selector("#create-btn")
     assert "/a" not in page.url
+
+
+def test_default_channel_local_history_and_echo(server, page):
+    """The anonymous default: the server stores nothing, but the sender's own
+    device keeps the message locally (IndexedDB echo) — it renders in the card
+    and survives a reload, while /api/messages stays empty."""
+    from uikit import idb_all
+
+    code = server.post("/api/channel", {"name": "Anon"}).json["code"]
+    page.goto(server.base + "/a#codes=" + code)
+    page.wait_for_selector(".channel .msgs")
+    # the card states that messages are not stored on the server
+    page.wait_for_selector(".channel .store-hint:not([hidden])")
+    # the create-form storage choice + explainer exist on the landing page
+    # (checked here to keep one browser round-trip)
+    # send from the card: server relays only, but the echo renders locally
+    page.click(".channel .send-details summary")
+    page.fill(".channel .send-details input", "Local only")
+    page.click(".channel .send-details button")
+    page.wait_for_selector(".channel .msg-title:has-text('Local only')")
+    snap = server.post("/api/messages", {"code": code}).json
+    assert snap["messages"] == []  # nothing at rest on the server
+    recs = idb_all(page)
+    assert any(r["title"] == "Local only" for r in recs)
+    # the local copy survives a reload
+    page.reload()
+    page.wait_for_selector(".channel .msg-title:has-text('Local only')")
+    # deleting removes it from this device
+    page.locator(".channel .msg-del").first.click()
+    page.wait_for_selector(
+        ".channel .msg-title:has-text('Local only')", state="detached"
+    )
+    assert not any(r["title"] == "Local only" for r in idb_all(page))
+
+
+def test_app_page_merges_local_and_server_without_duplicates(server, page):
+    """A message that exists BOTH server-side and in the device-local store
+    (e.g. the sender's echo of a stored message) must render exactly once;
+    local-only records merge in alongside."""
+    from uikit import ch_of, seed_local
+
+    code = server.post("/api/channel", {"name": "Both", "message_store": "max"}).json[
+        "code"
+    ]
+    stored = server.post("/api/message", {"code": code, "title": "on server"}).json[
+        "message"
+    ]
+    page.goto(server.base + "/a#codes=" + code)
+    page.wait_for_selector(".channel .msg-title:has-text('on server')")
+    ch = ch_of(code)
+    seed_local(
+        page,
+        ch,
+        [
+            {"id": stored["id"], "ts": stored["ts"], "title": "on server"},  # duplicate
+            {"id": "loc41loc", "ts": stored["ts"] + 5, "title": "local only"},
+        ],
+    )
+    page.reload()
+    page.wait_for_selector(".channel .msg-title:has-text('local only')")
+    titles = page.eval_on_selector_all(
+        ".channel .msg-title", "els => els.map(e => e.textContent)"
+    )
+    assert titles.count("on server") == 1  # deduped by message id
+    assert titles.count("local only") == 1
+
+
+def test_landing_storage_select_and_explainer(server, page):
+    page.goto(server.base + "/?create")
+    # default is "no storage"; the pros/cons explainer is present and honest
+    assert page.input_value("#msg-store") == "off"
+    page.click("#store-note summary")
+    note = page.text_content("#store-note")
+    assert "Pros" in page.text_content("#store-note summary") or "cons" in note.lower()
+    assert "most private" in note
+    assert "notifications" in note.lower()
+    assert "Apple" in note and "Google" in note  # platform-transport disclosure
+    # creating with the default → the card on /a shows the no-storage hint
+    page.fill("#channel-name", "Quiet")
+    page.click("#create-btn")
+    page.wait_for_selector("#create-result:not([hidden])")
+    code = page.text_content("#new-code").strip()
+    snap = server.post("/api/messages", {"code": code}).json
+    assert snap["channel"]["message_store"] == 0
 
 
 def test_unknown_code_shows_friendly_error(server, page):

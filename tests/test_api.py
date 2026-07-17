@@ -77,7 +77,10 @@ def test_channel_create_rejects_long_name(server):
 
 
 def test_send_password_channel_flow(server):
-    resp = server.post("/api/channel", {"name": "Event", "send_password": "manager-key"})
+    resp = server.post(
+        "/api/channel",
+        {"name": "Event", "send_password": "manager-key", "message_store": "max"},
+    )
     assert resp.status == 200 and resp.json["send_protected"] is True
     code = resp.json["code"]
     # snapshot advertises that sending is protected
@@ -141,7 +144,8 @@ def test_delete_message_bad_id_is_400(server, channel):
 
 def test_delete_on_protected_channel_needs_password(server):
     code = server.post(
-        "/api/channel", {"name": "P", "send_password": "key-phrase"}
+        "/api/channel",
+        {"name": "P", "send_password": "key-phrase", "message_store": "max"},
     ).json["code"]
     mid = server.post(
         "/api/message", {"code": code, "title": "x", "send_password": "key-phrase"}
@@ -612,7 +616,10 @@ def test_create_channel_with_auto_remove_days(server):
 
 
 def test_extend_channel_endpoint(server, push_calls):
-    old = server.post("/api/channel", {"name": "Evt", "auto_remove_days": 2}).json
+    old = server.post(
+        "/api/channel",
+        {"name": "Evt", "auto_remove_days": 2, "message_store": "max"},
+    ).json
     server.post("/api/message", {"code": old["code"], "title": "keep"})
     server.post(
         "/api/subscribe", {"code": old["code"], "subscription": fake_subscription(9)}
@@ -636,6 +643,51 @@ def test_extend_channel_endpoint(server, push_calls):
     # unknown old code → 404
     ghost = server.post("/api/channel/extend", {"code": core.generate_code()})
     assert ghost.status == 404
+
+
+def test_message_store_via_api(server, push_calls):
+    # default channel: server stores nothing — pure relay
+    plain = server.post("/api/channel", {"name": "Anon"}).json
+    assert plain["message_store"] == 0
+    server.post(
+        "/api/subscribe", {"code": plain["code"], "subscription": fake_subscription(3)}
+    )
+    resp = server.post("/api/message", {"code": plain["code"], "title": "ghost"})
+    assert resp.status == 200
+    assert resp.json["stored"] is False and resp.json["sent"] == 1
+    assert resp.json["message"]["title"] == "ghost"  # sender's local echo
+    snap = server.post("/api/messages", {"code": plain["code"]}).json
+    assert snap["messages"] == [] and snap["channel"]["message_store"] == 0
+    # the push still went out, carrying the channel-id prefix
+    assert push_calls[-1]["payload"]["ch"] == core.code_hash(plain["code"])[:12]
+
+    # per-message override: store this one despite the channel default
+    resp = server.post(
+        "/api/message", {"code": plain["code"], "title": "keep", "store": "max"}
+    )
+    assert resp.json["stored"] is True
+    titles = [
+        m["title"]
+        for m in server.post("/api/messages", {"code": plain["code"]}).json["messages"]
+    ]
+    assert titles == ["keep"]
+
+    # retention channel: seconds-based storage setting round-trips
+    timed = server.post("/api/channel", {"name": "T", "message_store": 3600}).json
+    assert timed["message_store"] == 3600
+    server.post("/api/message", {"code": timed["code"], "title": "hour"})
+    msgs = server.post("/api/messages", {"code": timed["code"]}).json["messages"]
+    assert msgs[0]["title"] == "hour" and msgs[0]["expires_at"] > msgs[0]["ts"]
+
+    # invalid values are rejected
+    for bad in ("forever", 59, True):
+        assert server.post("/api/channel", {"message_store": bad}).status == 400
+    assert (
+        server.post(
+            "/api/message", {"code": plain["code"], "title": "x", "store": 59}
+        ).status
+        == 400
+    )
 
 
 def test_expired_channel_is_404_everywhere(server, monkeypatch):
