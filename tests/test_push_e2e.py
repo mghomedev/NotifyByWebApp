@@ -87,6 +87,26 @@ def test_push_fans_out_to_every_device(server, channel, push_service):
         assert dev.decrypt(reqs[0]["body"])["title"] == "Broadcast"
 
 
+def test_timed_channel_delivers_push_with_future_exp(server, push_service):
+    """A channel created WITH an auto-remove date must deliver pushes exactly
+    like a normal channel while it is alive; the payload carries the future
+    `exp` so the SW can suppress only genuinely late deliveries."""
+    resp = server.post("/api/channel", {"name": "Timed", "auto_remove_days": 30})
+    assert resp.status == 200
+    code = resp.json["code"]
+    dev = FakeDevice(push_service, "timedphone")
+    _attach(code, dev)
+
+    r = server.post("/api/message", {"code": code, "title": "Ping", "body": "now"})
+    assert r.status == 200
+    assert r.json["sent"] == 1 and r.json["failed"] == 0
+
+    payload = dev.decrypt(push_service.requests_for("/push/timedphone")[0]["body"])
+    assert payload["title"] == "Ping"
+    assert payload["exp"] == resp.json["expires"]  # future end date rides along
+    assert payload["exp"] > payload["ts"]  # sanity: not already expired
+
+
 def test_gone_endpoint_returns_410_and_is_pruned(server, channel, push_service):
     live = FakeDevice(push_service, "live")
     gone = FakeDevice(push_service, "gone")

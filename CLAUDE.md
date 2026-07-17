@@ -28,8 +28,12 @@ and in README.md; keep all three in sync.
 - Possession of the code ⇒ may subscribe AND send (deliberate; a separate subscribe-only
   key remains a possible future option).
 - **Auto-remove (optional)**: a channel may be created with an end date — never (default),
-  1 day / 1 week / 1 month / 1 year, or custom days (`auto_remove_days`, 1–3650, on
-  `/api/channel`). The date is encoded INTO the code as a **`-expYYYYMMDD` suffix** (end of
+  1 day / 1 week / 1 month / 1 year, custom days (`auto_remove_days`, 1–3650, on
+  `/api/channel`), or **a specific date from the native calendar picker**
+  (`<input type="date">`; the client converts the picked UTC day to `auto_remove_days`
+  via `daysUntilUTCDate`, so the API stays days-based and the encoded day equals the
+  picked day exactly — offered on the create form AND the extend dialog).
+  The date is encoded INTO the code as a **`-expYYYYMMDD` suffix** (end of
   that UTC day; still matches the unchanged CODE_RE → no format migration, old clients
   accept the codes). Because channels are addressed by `sha256(code)`, the suffix is
   **tamper-proof**: editing it addresses a different, non-existent channel — which also
@@ -319,7 +323,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 207 tests
+## Tests (pytest; must be green before every deploy) — 209 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends

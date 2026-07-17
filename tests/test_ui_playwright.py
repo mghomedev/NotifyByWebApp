@@ -546,6 +546,8 @@ def test_landing_create_with_auto_remove(server, page):
 
 
 def test_app_page_expiry_badge_and_extend_flow(server, page):
+    from datetime import datetime, timedelta, timezone
+
     code = server.post("/api/channel", {"name": "Ending", "auto_remove_days": 30}).json[
         "code"
     ]
@@ -556,20 +558,48 @@ def test_app_page_expiry_badge_and_extend_flow(server, page):
     # the share QR block itself carries the end date (screenshots keep it)
     assert "Ends on" in page.text_content(".channel .share-ends")
 
-    # extend: creates a successor with the same message; the old card goes away
+    # extend via the CALENDAR picker: creates a successor ending exactly on the
+    # picked day, with the same message; the old card goes away
+    target = (datetime.now(timezone.utc) + timedelta(days=100)).strftime("%Y-%m-%d")
     page.click(".channel .extend-details summary")
-    page.select_option(".channel .extend-days", "365")
+    page.select_option(".channel .extend-days", "date")
+    page.wait_for_selector(".channel .extend-date:not([hidden])")
+    page.fill(".channel .extend-date", target)
     page.click(".channel .extend-details button")
     page.wait_for_selector(
         '.channel[data-code="' + code + '"]', state="detached", timeout=8000
     )
     page.wait_for_selector(".channel .msg-title:has-text('carry me')")
     new_code = page.get_attribute(".channel", "data-code")
-    assert new_code != code and re.search(r"-exp\d{8}$", new_code)
+    assert new_code != code
+    assert new_code.endswith("-exp" + target.replace("-", ""))  # exact picked day
     # the old code is tombstoned on this device; a toast explains the switch
     removed = page.evaluate("JSON.parse(localStorage.getItem('nbw_removed')||'[]')")
     assert code in removed
     assert page.locator("#toasts .toast", has_text="Channel extended").count() >= 1
+
+
+def test_landing_create_with_calendar_date(server, page):
+    from datetime import datetime, timedelta, timezone
+
+    target = (datetime.now(timezone.utc) + timedelta(days=14)).strftime("%Y-%m-%d")
+    page.goto(server.base + "/?create")
+    page.select_option("#auto-remove", "date")
+    page.wait_for_selector("#auto-remove-date:not([hidden])")
+    page.fill("#auto-remove-date", target)
+    page.fill("#channel-name", "Dated")
+    page.click("#create-btn")
+    page.wait_for_selector("#create-result:not([hidden])")
+    code = page.text_content("#new-code").strip()
+    # the encoded end date is EXACTLY the picked calendar day
+    assert code.endswith("-exp" + target.replace("-", ""))
+    assert target in page.text_content("#create-ends")
+    # a past date is rejected client-side with a clear message
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    page.select_option("#auto-remove", "date")
+    page.fill("#auto-remove-date", yesterday)
+    page.click("#create-btn")
+    assert "tomorrow" in page.text_content("#create-error")
 
 
 def test_app_page_expired_code_is_tombstoned_with_notice(server, page):

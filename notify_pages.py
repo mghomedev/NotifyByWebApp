@@ -323,8 +323,10 @@ send and receive its messages.</p>
 <option value="30">after 1 month</option>
 <option value="365">after 1 year</option>
 <option value="custom">after a custom number of days&hellip;</option>
+<option value="date">on a specific date (pick from calendar)&hellip;</option>
 </select>
 <input id="auto-remove-days" type="number" min="1" max="3650" placeholder="Number of days (1&ndash;3650)" hidden>
+<input id="auto-remove-date" type="date" hidden>
 <p class="muted fn-note" id="auto-remove-note">* On the expire day the channel, its stored
 messages and all subscriptions are deleted on the server, and the channel disappears from
 the app. It <strong>cannot remotely delete messages from other people's devices</strong>
@@ -502,19 +504,37 @@ $('#add-code').addEventListener('click',function(){
 if(addCode($('#code-input').value))$('#code-input').value=''});
 $('#code-input').addEventListener('keydown',function(e){
 if(e.key==='Enter'&&addCode($('#code-input').value))$('#code-input').value=''});
-var arSel=$('#auto-remove'),arDays=$('#auto-remove-days');
-arSel.addEventListener('change',function(){arDays.hidden=arSel.value!=='custom'});
+var arSel=$('#auto-remove'),arDays=$('#auto-remove-days'),arDate=$('#auto-remove-date');
+// whole days from today (UTC) until a calendar date 'YYYY-MM-DD' — the API is
+// days-based, and adding whole days to "now" lands exactly on the picked UTC day
+function daysUntilUTCDate(v){
+v=(v||'').split('-');
+if(v.length!==3)return NaN;
+var now=new Date();
+return Math.round((Date.UTC(+v[0],+v[1]-1,+v[2])
+-Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()))/864e5)}
+arSel.addEventListener('change',function(){
+arDays.hidden=arSel.value!=='custom';
+arDate.hidden=arSel.value!=='date';
+if(arSel.value==='date'&&!arDate.min){
+arDate.min=new Date(Date.now()+864e5).toISOString().slice(0,10);
+arDate.max=new Date(Date.now()+3650*864e5).toISOString().slice(0,10)}});
 function autoRemoveDays(){
-// null = never; NaN signals an invalid custom value
+// null = never; NaN signals an invalid custom value/date
 if(arSel.value==='custom'){
 var n=parseInt(arDays.value,10);
 return (n>=1&&n<=3650)?n:NaN}
+if(arSel.value==='date'){
+var d=daysUntilUTCDate(arDate.value);
+return (d>=1&&d<=3650)?d:NaN}
 return arSel.value?parseInt(arSel.value,10):null}
 $('#create-btn').addEventListener('click',function(){
 var btn=$('#create-btn');
 var days=autoRemoveDays();
 if(days!==null&&isNaN(days)){
-$('#create-error').textContent='Auto-remove: enter a number of days between 1 and 3650.';return}
+$('#create-error').textContent=arSel.value==='date'
+?'Expire date: pick a day from tomorrow up to 10 years ahead.'
+:'Auto-remove: enter a number of days between 1 and 3650.';return}
 btn.disabled=true;
 $('#create-error').textContent='';
 api('/api/channel',{name:$('#channel-name').value,send_password:$('#channel-password').value,
@@ -711,6 +731,14 @@ return m[1].slice(0,4)+'-'+m[1].slice(4,6)+'-'+m[1].slice(6,8)}
 function expiryDaysLeft(c){
 var e=codeExpiry(c);
 return e==null?null:Math.max(0,Math.ceil((e-Date.now())/864e5))}
+// whole days from today (UTC) until a calendar date 'YYYY-MM-DD' — the API is
+// days-based, and adding whole days to "now" lands exactly on the picked UTC day
+function daysUntilUTCDate(v){
+v=(v||'').split('-');
+if(v.length!==3)return NaN;
+var now=new Date();
+return Math.round((Date.UTC(+v[0],+v[1]-1,+v[2])
+-Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()))/864e5)}
 // small informational toast (no message actions)
 function noticeToast(title,body){
 var wrap=$('#toasts');if(!wrap)return;
@@ -1090,12 +1118,17 @@ ext.appendChild(el('p','muted fn-note','Auto-removal deletes the channel and its
 +'it cannot remotely delete messages already delivered to other devices \\u2014 each device keeps its own copy.'));
 var esel=document.createElement('select');esel.className='extend-days';
 [['','no end date (never)'],['1','1 day from now'],['7','1 week from now'],
-['30','1 month from now'],['365','1 year from now'],['custom','custom number of days\\u2026']]
+['30','1 month from now'],['365','1 year from now'],['custom','custom number of days\\u2026'],
+['date','on a specific date (pick from calendar)\\u2026']]
 .forEach(function(o){var op=document.createElement('option');
 op.value=o[0];op.textContent=o[1];esel.appendChild(op)});
 var ecust=el('input','extend-custom');ecust.type='number';ecust.min='1';ecust.max='3650';
 ecust.placeholder='Number of days';ecust.hidden=true;
-esel.addEventListener('change',function(){ecust.hidden=esel.value!=='custom'});
+var edate=el('input','extend-date');edate.type='date';edate.hidden=true;
+edate.min=new Date(Date.now()+864e5).toISOString().slice(0,10);
+edate.max=new Date(Date.now()+3650*864e5).toISOString().slice(0,10);
+esel.addEventListener('change',function(){
+ecust.hidden=esel.value!=='custom';edate.hidden=esel.value!=='date'});
 var enot=document.createElement('label');enot.className='muted extend-notify';
 var echk=document.createElement('input');echk.type='checkbox';echk.checked=true;
 enot.appendChild(echk);
@@ -1107,6 +1140,10 @@ var days=null;
 if(esel.value==='custom'){
 days=parseInt(ecust.value,10);
 if(!days||days<1||days>3650){eerr.textContent='Enter 1\\u20133650 days.';return}}
+else if(esel.value==='date'){
+days=daysUntilUTCDate(edate.value);
+if(!(days>=1&&days<=3650)){
+eerr.textContent='Pick a day from tomorrow up to 10 years ahead.';return}}
 else if(esel.value)days=parseInt(esel.value,10);
 ego.disabled=true;eerr.textContent='Creating the extended channel\\u2026';
 api('/api/channel/extend',{code:code,auto_remove_days:days,notify:echk.checked,
@@ -1121,7 +1158,7 @@ noticeToast('Channel extended',
 eerr.textContent=(e&&e.status===403)?'This channel requires a valid send password.'
 :('Could not extend: '+(e.message||'error'));
 ego.disabled=false})});
-ext.appendChild(esel);ext.appendChild(ecust);ext.appendChild(enot);
+ext.appendChild(esel);ext.appendChild(ecust);ext.appendChild(edate);ext.appendChild(enot);
 ext.appendChild(ego);ext.appendChild(eerr);
 card.appendChild(ext)}
 var row=el('div','row');

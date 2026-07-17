@@ -39,7 +39,8 @@ the server.
   stay; older ones fold into a "More…" expander).
 - **Optional send-password** per channel (only holders of the password can send).
 - **Self-removing channels** — optionally pick an end date when creating (1 day / 1 week /
-  1 month / 1 year / custom days). The date is encoded into the channel code itself
+  1 month / 1 year / custom days, or an exact date from a calendar picker). The date is
+  encoded into the channel code itself
   (`…-expYYYYMMDD`), every QR / link / channel card clearly shows **"⏳ Ends on DATE"**, and
   on that day the channel deletes itself everywhere — messages, subscriptions and the
   entry on your devices (you get a short notice). The date cannot be forged or changed:
@@ -147,7 +148,7 @@ only in local `.env` files (gitignored) and Vercel environment variables.
 python -m venv .venv && . .venv/Scripts/activate   # .venv/bin/activate on Linux/macOS
 pip install -r requirements-dev.txt
 python -m playwright install chromium              # once, for the browser UI tests
-python -m pytest                                   # 207 tests, fully offline
+python -m pytest                                   # 209 tests, fully offline
 ```
 
 Tests include real-crypto Web Push (a fake device decrypts the actual payload) and browser
