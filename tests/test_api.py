@@ -591,9 +591,13 @@ def test_no_request_logging(server, channel, capfd):
     user data) to the function logs."""
     server.get("/?probe=SECRET_MARKER")
     server.post("/api/messages", {"code": channel})
+    # the GET API puts the code into the request line — our own function log
+    # must still record NOTHING (platform logs are the documented residual)
+    server.get(f"/api/messages?code={channel}&probe=SECRET_MARKER_GET")
     server.get("/definitely-missing-page")
     out, err = capfd.readouterr()
     assert "SECRET_MARKER" not in out + err
+    assert channel not in out + err
     assert "GET /" not in out + err
     assert "POST /" not in out + err
 
@@ -643,6 +647,187 @@ def test_extend_channel_endpoint(server, push_calls):
     # unknown old code → 404
     ghost = server.post("/api/channel/extend", {"code": core.generate_code()})
     assert ghost.status == 404
+
+
+# ---------------------------------------------------------- GET API twins
+
+
+def _q(code):
+    from urllib.parse import quote
+
+    return quote(code, safe="")
+
+
+def test_get_api_send_list_and_headers(server, push_calls):
+    ch = server.post("/api/channel", {"name": "GetChan", "message_store": "max"}).json
+    code = ch["code"]
+    server.post("/api/subscribe", {"code": code, "subscription": fake_subscription(7)})
+    r = server.get(f"/api/message?code={_q(code)}&title=Hello%20GET&body=World")
+    assert r.status == 200 and r.json["ok"] and r.json["sent"] == 1
+    assert r.headers.get("Cache-Control") == "no-store"
+    assert r.headers.get("Access-Control-Allow-Origin") == "*"
+    assert push_calls[-1]["payload"]["title"] == "Hello GET"
+    server.get(f"/api/message?code={_q(code)}&title=Second")
+    # list via GET returns the same JSON as POST; limit is coerced and honored
+    r2 = server.get(f"/api/messages?code={_q(code)}&limit=1")
+    assert r2.status == 200
+    assert [m["title"] for m in r2.json["messages"]] == ["Second"]
+    assert r2.json == server.post("/api/messages", {"code": code, "limit": 1}).json
+
+
+def test_get_api_create_extend_delete_clear_unsubscribe(server, push_calls):
+    r = server.get(
+        "/api/channel?name=Via%20GET&auto_remove_days=7&message_store=max"
+        "&send_cooloff_minutes=0"
+    )
+    assert r.status == 200 and r.json["name"] == "Via GET"
+    code = r.json["code"]
+    assert core.code_expiry(code) is not None  # auto_remove_days coerced
+    assert r.json["message_store"] == -1
+    # subscribe via GET with URL-encoded JSON
+    sub = _q(json.dumps(fake_subscription(9)))
+    assert (
+        server.get(f"/api/subscribe?code={_q(code)}&subscription={sub}").status == 200
+    )
+    assert server.get("/api/subscribe?code=" + _q(code) + "&subscription=notjson").status == 400
+    # send + delete + clear via GET
+    mid = server.get(f"/api/message?code={_q(code)}&title=temp").json["message"]["id"]
+    assert server.get(f"/api/message/delete?code={_q(code)}&id={mid}").status == 200
+    server.get(f"/api/message?code={_q(code)}&title=a")
+    server.get(f"/api/message?code={_q(code)}&title=b")
+    assert server.get(f"/api/messages/clear?code={_q(code)}&keep=1").status == 200
+    assert len(server.get(f"/api/messages?code={_q(code)}").json["messages"]) == 1
+    # extend via GET with notify=false must NOT push a migration notice
+    push_calls.clear()
+    r3 = server.get(
+        f"/api/channel/extend?code={_q(code)}&auto_remove_days=30&notify=false"
+    )
+    assert r3.status == 200 and push_calls == []  # the bool("false") trap
+    # unsubscribe via GET
+    endpoint = fake_subscription(9)["endpoint"]
+    assert (
+        server.get(f"/api/unsubscribe?code={_q(code)}&endpoint={_q(endpoint)}").status
+        == 200
+    )
+
+
+def test_get_api_standard_error_codes(server):
+    prot = server.post(
+        "/api/channel",
+        {"name": "P", "send_password": "gate-pass9", "message_store": "max"},
+    ).json["code"]
+    # 403 wrong password — proves the shared exception chain (naive dispatch
+    # from do_GET would have produced a 500 here)
+    r = server.get(f"/api/message?code={_q(prot)}&title=x&send_password=wrong")
+    assert r.status == 403 and r.json["ok"] is False
+    # 404 unknown channel, as JSON with CORS
+    ghost = core.generate_code()
+    r = server.get(f"/api/messages?code={_q(ghost)}")
+    assert r.status == 404 and r.json["ok"] is False
+    assert r.headers.get("Access-Control-Allow-Origin") == "*"
+    # 400s: blank code, bad code, code-only send (load-bearing: a bare URL
+    # fetched by anything is inert), bad params
+    assert server.get("/api/messages?code=").status == 400
+    assert server.get("/api/messages?code=short").status == 400
+    ok_code = server.post("/api/channel", {"name": "x"}).json["code"]
+    assert server.get(f"/api/message?code={_q(ok_code)}").status == 400
+    assert server.get(f"/api/channel?auto_remove_days=nope").status == 400
+    # unknown GET /api/* path stays a JSON 404
+    r = server.get("/api/definitely-not-a-thing")
+    assert r.status == 404 and r.json["ok"] is False
+    # duplicate params: the FIRST value wins
+    r = server.get(f"/api/messages?code={_q(ok_code)}&code={_q(ghost)}")
+    assert r.status == 200
+
+
+def test_get_api_prefetch_and_preview_agents_refused(server, push_calls):
+    code = server.post("/api/channel", {"name": "G", "message_store": "max"}).json[
+        "code"
+    ]
+    # speculative fetches (omnibox preload etc.) must never send
+    r = server.get(
+        f"/api/message?code={_q(code)}&title=spec",
+        headers={"Sec-Purpose": "prefetch"},
+    )
+    assert r.status == 403
+    # chat link-preview bots must never send
+    r = server.get(
+        f"/api/message?code={_q(code)}&title=bot",
+        headers={"User-Agent": "WhatsApp/2.23.20"},
+    )
+    assert r.status == 403
+    assert server.post("/api/messages", {"code": code}).json["messages"] == []
+    assert push_calls == []
+    # the read-only list endpoint is fine for such agents
+    assert (
+        server.get(
+            f"/api/messages?code={_q(code)}", headers={"Sec-Purpose": "prefetch"}
+        ).status
+        == 200
+    )
+
+
+def test_get_api_rate_limited_and_status_limited(server, env):
+    env.setenv("NBW_RATE_PER_MIN", "3")
+    code = server.post("/api/channel", {"name": "RL"}).json["code"]  # uses 1 POST
+    statuses = [server.get(f"/api/messages?code={_q(code)}").status for _ in range(4)]
+    assert 429 in statuses  # GET now counts against the same per-IP bucket
+    # /api/health stays exempt for uptime probes
+    assert server.get("/api/health").status == 200
+    # /api/status is now under the limiter too
+    from conftest import TEST_STATUS_SECRET
+
+    r = server.get(
+        "/api/status", headers={"Authorization": f"Bearer {TEST_STATUS_SECRET}"}
+    )
+    assert r.status == 429
+
+
+def test_head_requests_have_no_side_effects(server):
+    code = server.post("/api/channel", {"name": "H", "message_store": "max"}).json[
+        "code"
+    ]
+    r = server._request("HEAD", f"/api/message?code={_q(code)}&title=via-head")
+    assert r.status == 501  # unsupported method, nothing executed
+    assert server.post("/api/messages", {"code": code}).json["messages"] == []
+
+
+# ------------------------------------------- send cool-off (spam protection)
+
+
+def test_send_cooloff_via_api(server, env, monkeypatch):
+    env.setenv("NBW_DEFAULT_COOLOFF_MINUTES", "5")
+    env.setenv("NBW_MIN_COOLOFF_MINUTES", "1")
+    ch = server.post("/api/channel", {"name": "Cool"}).json
+    assert ch["send_cooloff"] == 300  # production default: 1 msg / 5 min
+    code = ch["code"]
+    assert server.post("/api/message", {"code": code, "title": "first"}).status == 200
+    # too fast → standard 429 with Retry-After header + retry_after JSON
+    r = server.post("/api/message", {"code": code, "title": "second"})
+    assert r.status == 429
+    assert "try again later" in r.json["error"]
+    assert 1 <= r.json["retry_after"] <= 300
+    assert int(r.headers.get("Retry-After")) == r.json["retry_after"]
+    # the GET twin hits the same wall
+    rg = server.get(f"/api/message?code={_q(code)}&title=third")
+    assert rg.status == 429 and rg.json["retry_after"] > 0
+    # the snapshot is the "get the timelimit" API
+    snap = server.post("/api/messages", {"code": code}).json
+    assert snap["channel"]["send_cooloff"] == 300
+    assert 0 < snap["send_ready_in"] <= 300
+    # once the window has passed, sending works again
+    import time as _time
+
+    real = _time.time
+    monkeypatch.setattr(_time, "time", lambda: real() + 301)
+    assert server.post("/api/message", {"code": code, "title": "later"}).status == 200
+    # bounds are enforced at creation (and never changeable afterwards —
+    # there is no API that updates a channel's cooloff)
+    assert server.post("/api/channel", {"send_cooloff_minutes": 0}).status == 400
+    assert server.post("/api/channel", {"send_cooloff_minutes": 43201}).status == 400
+    assert server.post("/api/channel", {"send_cooloff_minutes": 1}).json[
+        "send_cooloff"
+    ] == 60
 
 
 def test_deploy_commit_footer_on_both_pages(server, env):

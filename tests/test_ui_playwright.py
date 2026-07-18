@@ -728,6 +728,102 @@ def test_landing_storage_select_and_explainer(server, page):
     assert snap["channel"]["message_store"] == 0
 
 
+def test_dev_section_get_examples_and_try_actions(server, page):
+    code = server.post("/api/channel", {"name": "DevChan", "message_store": "max"}).json[
+        "code"
+    ]
+    page.goto(server.base + "/?create")
+    page.fill("#send-code", code)
+    # GET examples are populated with the selected code — as TEXT, not links
+    assert code in page.text_content("#get-send-example")
+    assert code in page.text_content("#get-list-example")
+    # the try-actions are BUTTONS with no href anywhere (crawler/prefetch-safe)
+    assert page.eval_on_selector("#try-send", "el => el.tagName") == "BUTTON"
+    assert page.eval_on_selector("#try-list", "el => el.tagName") == "BUTTON"
+    assert (
+        page.eval_on_selector_all(
+            "section.dev a[href*='/api/']", "els => els.length"
+        )
+        == 0
+    )
+    # clicking "send a test message" opens the built GET URL: ok JSON, and the
+    # message (client-generated local timestamp body) lands in the channel
+    with page.expect_popup() as pi:
+        page.click("#try-send")
+    pop = pi.value
+    pop.wait_for_load_state()
+    assert '"ok"' in pop.content()
+    assert "Test%20from%20API" in pop.url
+    pop.close()
+    snap = server.post("/api/messages", {"code": code}).json
+    assert snap["messages"][0]["title"] == "Test from API"
+    assert any(c.isdigit() for c in snap["messages"][0]["body"])  # timestamp
+    # clicking "view messages" opens the JSON list
+    with page.expect_popup() as pi2:
+        page.click("#try-list")
+    pop2 = pi2.value
+    pop2.wait_for_load_state()
+    assert "Test from API" in pop2.content()
+    pop2.close()
+    # with a send-password typed, the URL carries a PLACEHOLDER — never the value
+    page.fill("#send-password", "super-secret-9")
+    with page.expect_popup() as pi3:
+        page.click("#try-send")
+    pop3 = pi3.value
+    assert "YOUR_SEND_PASSWORD" in pop3.url
+    assert "super-secret-9" not in pop3.url
+    pop3.close()
+
+
+def test_send_cooloff_countdown_and_autoretry_on_card(server, page):
+    import notify_core as core
+
+    code = core.create_channel("CoolUI", message_store=core.STORE_MAX, send_cooloff=3)[
+        "code"
+    ]
+    page.goto(server.base + "/a#codes=" + code)
+    # the channel's send limit is shown on the card
+    page.wait_for_selector(".channel .cool-hint:not([hidden])")
+    assert "Send limit" in page.text_content(".channel .cool-hint")
+    page.click(".channel .send-details summary")
+    page.fill(".channel .send-details input", "first")
+    page.click(".channel .send-details button")
+    page.wait_for_selector(".channel .msg-title:has-text('first')")
+    # an immediate second send runs into the cool-off: countdown near Send,
+    # then the front-end auto-retries and the message goes through
+    page.fill(".channel .send-details input", "second")
+    page.click(".channel .send-details button")
+    page.wait_for_selector(
+        ".channel .send-details div:has-text('time-limit cool-off')", timeout=8000
+    )
+    page.wait_for_selector(".channel .msg-title:has-text('second')", timeout=15000)
+
+
+def test_send_cooloff_countdown_on_landing_form(server, page):
+    import notify_core as core
+
+    code = core.create_channel("CoolLand", message_store=core.STORE_MAX, send_cooloff=3)[
+        "code"
+    ]
+    page.goto(server.base + "/?create")
+    page.fill("#send-code", code)
+    page.dispatch_event("#send-code", "change")
+    # the limit is shown for the picked channel
+    page.wait_for_selector("#send-limit-info:not([hidden])")
+    assert "Send limit" in page.text_content("#send-limit-info")
+    page.fill("#send-title", "one")
+    page.click("#send-btn")
+    page.wait_for_selector("#send-ok:not([hidden])")
+    page.fill("#send-title", "two")
+    page.click("#send-btn")
+    page.wait_for_selector("#send-wait:not([hidden])", timeout=8000)
+    assert "time-limit cool-off" in page.text_content("#send-wait")
+    # auto-retry lands the second message once the window opens
+    page.wait_for_selector("#send-ok:not([hidden])", timeout=15000)
+    snap = server.post("/api/messages", {"code": code}).json
+    assert [m["title"] for m in snap["messages"]] == ["two", "one"]
+
+
 def test_unknown_code_shows_friendly_error(server, page):
     page.goto(server.base + "/a#codes=this_code_does_not_exist_123456")
     page.wait_for_selector(".channel h2:has-text('Unknown channel')")

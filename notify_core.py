@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -83,6 +84,29 @@ def channel_ttl_seconds() -> int:
     return _int_env("NBW_CHANNEL_TTL_DAYS", 400) * 86400
 
 
+def _int_env_min0(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name) or default))
+    except ValueError:
+        return default
+
+
+# Per-channel send cool-off (the channel-level DDoS/spam-protection feature):
+# the minimum interval between messages, fixed at channel creation. Production
+# defaults: 1 message per 5 minutes, creator-selectable 1 min .. 1 month. The
+# env knobs exist for self-hosters and for the test suite (which sets the
+# default to 0 = disabled so unrelated tests can send freely).
+MAX_COOLOFF_MINUTES = 43200  # 30 days
+
+
+def default_cooloff_seconds() -> int:
+    return _int_env_min0("NBW_DEFAULT_COOLOFF_MINUTES", 5) * 60
+
+
+def min_cooloff_minutes() -> int:
+    return _int_env_min0("NBW_MIN_COOLOFF_MINUTES", 1)
+
+
 def vapid_config() -> "tuple[str, str, str]":
     """(private_key, public_key, subject) — empty strings when unset."""
     return (
@@ -99,6 +123,15 @@ def status_secret() -> str:
 
 class StorageError(Exception):
     """The persistent store is unreachable or returned an error."""
+
+
+class CoolingOff(Exception):
+    """The channel's per-channel send cool-off (DDoS/spam protection) blocks
+    this message. `retry_after` = seconds until the next send is allowed."""
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__(f"send cool-off: retry in {retry_after}s")
+        self.retry_after = max(1, int(retry_after))
 
 
 class ChannelFull(Exception):
@@ -168,6 +201,24 @@ STORE_OFF = 0
 STORE_MAX = -1
 MIN_STORE_SECONDS = 60
 MAX_STORE_SECONDS = MAX_AUTO_REMOVE_DAYS * 86400
+
+
+def validate_send_cooloff(value: object) -> int:
+    """Parse the channel's send cool-off in MINUTES → seconds. None/absent →
+    the default (5 min in production). Bounds: min_cooloff_minutes() (1 in
+    production; 0 = disabled, reachable only where the env allows it) up to
+    one month."""
+    if value is None:
+        return default_cooloff_seconds()
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("send_cooloff_minutes must be a whole number of minutes")
+    lo = min_cooloff_minutes()
+    if not lo <= value <= MAX_COOLOFF_MINUTES:
+        raise ValueError(
+            f"send_cooloff_minutes must be between {max(lo, 1)} and "
+            f"{MAX_COOLOFF_MINUTES}"
+        )
+    return value * 60
 
 
 def validate_message_store(value: object) -> int:
@@ -428,6 +479,7 @@ class MemoryStorage:
         self._lock = threading.Lock()
         self._ch: "dict[str, dict]" = {}
         self._kv: "dict[str, str]" = {}
+        self._cool: "dict[str, float]" = {}  # kh -> next allowed send (epoch)
 
     def _entry(self, kh: str) -> "dict | None":
         return self._ch.get(kh)
@@ -535,6 +587,23 @@ class MemoryStorage:
     def set_value(self, key: str, value: str, ttl: int) -> None:
         with self._lock:
             self._kv[key] = value
+
+    def try_mark_send(self, kh: str, cooloff: int) -> "int | None":
+        """Atomically start the channel's send cool-off window. Returns None
+        when the send is allowed (window started), else the remaining wait in
+        seconds. Only a successful mark starts a new window."""
+        with self._lock:
+            now = time.time()
+            until = self._cool.get(kh, 0)
+            if now < until:
+                return max(1, math.ceil(until - now))
+            self._cool[kh] = now + cooloff
+            return None
+
+    def send_wait(self, kh: str) -> int:
+        """Seconds until the next send is allowed (0 = now)."""
+        with self._lock:
+            return max(0, math.ceil(self._cool.get(kh, 0) - time.time()))
 
     def ping(self) -> bool:
         return True
@@ -680,6 +749,24 @@ class RedisStorage:
 
     def set_value(self, key: str, value: str, ttl: int) -> None:
         self._pipeline([["SET", "nbw:" + key, value, "EX", str(ttl)]])
+
+    def try_mark_send(self, kh: str, cooloff: int) -> "int | None":
+        """SET NX EX is atomic — concurrent senders cannot both pass; the
+        key's TTL is exactly the remaining cool-off."""
+        res = self._pipeline(
+            [
+                ["SET", self._k("cool", kh), "1", "NX", "EX", str(cooloff)],
+                ["TTL", self._k("cool", kh)],
+            ]
+        )
+        if res[0] == "OK":
+            return None
+        ttl = int(res[1] or 0)
+        return max(1, ttl)
+
+    def send_wait(self, kh: str) -> int:
+        ttl = int(self._pipeline([["TTL", self._k("cool", kh)]])[0] or 0)
+        return max(0, ttl)
 
     def ping(self) -> bool:
         return self._pipeline([["PING"]])[0] == "PONG"
@@ -843,6 +930,7 @@ def _new_channel(storage, name: str, created_meta: dict, suffix: str) -> dict:
                 "send_protected": bool(meta.get("send_pw")),
                 "expires": expires,
                 "message_store": meta.get("msg_store", STORE_MAX),
+                "send_cooloff": meta.get("cooloff", default_cooloff_seconds()),
             }
     raise StorageError("could not create channel")
 
@@ -852,9 +940,16 @@ def create_channel(
     send_password: str = "",
     auto_remove_days: "int | None" = None,
     message_store: int = STORE_OFF,
+    send_cooloff: "int | None" = None,
 ) -> dict:
     storage = get_storage()
-    meta = {"name": name, "created": int(time.time()), "msg_store": message_store}
+    meta = {
+        "name": name,
+        "created": int(time.time()),
+        "msg_store": message_store,
+        # per-channel DDoS/spam protection, fixed for the channel's lifetime
+        "cooloff": default_cooloff_seconds() if send_cooloff is None else send_cooloff,
+    }
     if send_password:
         meta["send_pw"] = _send_password_hash(send_password)
     return _new_channel(storage, name, meta, expiry_suffix(auto_remove_days))
@@ -866,6 +961,7 @@ def extend_channel(
     send_password: object = None,
     notify: bool = True,
     message_store: "int | None" = None,
+    send_cooloff: "int | None" = None,
 ) -> "dict | None":
     """'Extend' a self-removing channel by creating a SUCCESSOR channel with a
     new end date (the old date is baked into the old code's hash, so it cannot
@@ -892,6 +988,12 @@ def extend_channel(
         message_store
         if message_store is not None
         else old_meta.get("msg_store", STORE_MAX)
+    )
+    # …and the send cool-off (DDoS/spam protection) likewise
+    meta["cooloff"] = (
+        send_cooloff
+        if send_cooloff is not None
+        else old_meta.get("cooloff", default_cooloff_seconds())
     )
     result = _new_channel(
         storage, meta["name"], meta, expiry_suffix(auto_remove_days)
@@ -952,6 +1054,7 @@ def channel_snapshot(code: str, limit: int) -> "dict | None":
         for m in (_load_stored(r) for r in storage.get_messages(kh, limit))
         if not _msg_expired(m, now)
     ]
+    cooloff = meta.get("cooloff", default_cooloff_seconds())
     return {
         "channel": {
             "name": meta.get("name", ""),
@@ -959,8 +1062,13 @@ def channel_snapshot(code: str, limit: int) -> "dict | None":
             "send_protected": bool(meta.get("send_pw")),
             "expires": meta.get("expires"),
             "message_store": meta.get("msg_store", STORE_MAX),
+            # the channel's send limit (DDoS/spam protection) — "the API to
+            # get the timelimit for each channel"
+            "send_cooloff": cooloff,
         },
         "subscribers": storage.sub_count(kh),
+        # seconds until the next send is allowed (0 = right now)
+        "send_ready_in": storage.send_wait(kh) if cooloff > 0 else 0,
         "messages": messages,
     }
 
@@ -1091,6 +1199,17 @@ def publish(
     if meta is None:
         return None
     _require_send_password(meta, send_password)
+    # Per-channel send cool-off (DDoS/spam protection): fixed at creation,
+    # enforced for EVERY sender. Atomic check-and-mark, so concurrent sends
+    # cannot both pass; a blocked attempt does NOT extend the window. The
+    # extend-channel migration notice (push_url set) is an internal system
+    # message and bypasses the check without starting a window.
+    if push_url is None:
+        cooloff = meta.get("cooloff", default_cooloff_seconds())
+        if cooloff > 0:
+            wait = storage.try_mark_send(kh, cooloff)
+            if wait:
+                raise CoolingOff(wait)
     ttl = _ttl_for(meta.get("expires"))
     retention = store if store is not None else meta.get("msg_store", STORE_MAX)
 

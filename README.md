@@ -102,9 +102,61 @@ curl -X POST https://YOUR-DEPLOYMENT/api/messages/clear \
 
 `/api/subscribe` and `/api/unsubscribe` (push subscription per device) are normally handled
 by the app itself. Limits: title ≤ 120 chars, body ≤ 2000, optional http(s) url ≤ 500,
-send-password 4–128 chars, auto-remove 1–3650 days, rate limit 120 requests/min/IP, ≤ 200
-subscribed devices per channel, newest 50 messages kept, channels expire after 400 days of
-inactivity (or on their auto-remove date, whichever comes first).
+send-password 4–128 chars, auto-remove 1–3650 days, per-channel send limit (see below,
+default 1 message / 5 min), rate limit 120 requests/min/IP, ≤ 200 subscribed devices per
+channel, newest 50 messages kept, channels expire after 400 days of inactivity (or on
+their auto-remove date, whichever comes first).
+
+### The same API via HTTP GET (REST-like)
+
+Every endpoint also accepts **HTTP GET** with the same fields as URL query parameters —
+for integrations that can only call a URL (IoT buttons, home automation, bookmarks).
+Responses are the same JSON (message lists included), and errors use standard HTTP status
+codes (400 invalid input, 403 wrong send password, 404 unknown channel, 429 rate/send
+limit, 502 storage). Example URLs:
+
+```text
+https://YOUR-DEPLOYMENT/api/messages?code=YOUR_CHANNEL_CODE
+https://YOUR-DEPLOYMENT/api/message?code=YOUR_CHANNEL_CODE&title=Hello&body=World
+https://YOUR-DEPLOYMENT/api/channel?name=My%20Channel&message_store=max&send_cooloff_minutes=5
+https://YOUR-DEPLOYMENT/api/message/delete?code=YOUR_CHANNEL_CODE&id=MESSAGE_ID
+https://YOUR-DEPLOYMENT/api/messages/clear?code=YOUR_CHANNEL_CODE&keep=3
+https://YOUR-DEPLOYMENT/api/channel/extend?code=OLD_CODE&auto_remove_days=365&notify=false
+https://YOUR-DEPLOYMENT/api/unsubscribe?code=YOUR_CHANNEL_CODE&endpoint=PUSH_ENDPOINT
+```
+
+Robust shell usage (handles spaces, `&` and UTF-8 for you):
+
+```bash
+curl -G https://YOUR-DEPLOYMENT/api/message \
+  --data-urlencode "code=YOUR_CHANNEL_CODE" \
+  --data-urlencode "title=Hello from GET" \
+  --data-urlencode "body=door sensor triggered"
+```
+
+⚠ **GET puts the secret channel code (and any send password) into the URL.** It can end
+up in server/infrastructure request logs (the hosting platform logs URLs even though this
+app's own logging is silenced), in browser history (possibly synced), and in link
+previews — and anything that auto-fetches a send-URL **sends a message** (chat link
+previews!). Treat GET send-URLs like the code itself, never paste one into a chat, and
+prefer POST for production integrations. Long or non-Latin bodies need POST (URL size
+limits). Speculative browser fetches (`Sec-Purpose: prefetch`) and known link-preview
+crawlers get 403 on all mutating GET endpoints as an extra safety net.
+
+## Spam & DDoS protection
+
+Two layers protect subscribers and the service from message floods:
+
+- **Per-channel send limit (cool-off)** — chosen when the channel is created and
+  **fixed for its lifetime** (`send_cooloff_minutes`, 1–43200 minutes; presets from
+  1 message/minute up to 1 message/month; default **1 message per 5 minutes**). EVERY
+  sender — including the channel's creator — receives HTTP **429** with a `Retry-After`
+  header and `retry_after` (seconds) in the JSON body when sending faster. The limit and
+  the current wait are readable via `/api/messages` (`channel.send_cooloff`,
+  `send_ready_in`). The app shows each channel's limit, and when you hit it the Send
+  button turns into a countdown that retries automatically (keep the window open).
+- **Per-IP rate limit** — 120 requests/min/IP across the whole API (POST and GET), plus
+  a channel-creation cap; the platform firewall is the hard backstop.
 
 ## Supported devices (minimum versions)
 
@@ -190,7 +242,7 @@ can always see precisely which state of this open-source code they are using.
 python -m venv .venv && . .venv/Scripts/activate   # .venv/bin/activate on Linux/macOS
 pip install -r requirements-dev.txt
 python -m playwright install chromium              # once, for the browser UI tests
-python -m pytest                                   # 228 tests, fully offline
+python -m pytest                                   # 244 tests, fully offline
 ```
 
 Tests include real-crypto Web Push (a fake device decrypts the actual payload) and browser

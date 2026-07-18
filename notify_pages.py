@@ -192,6 +192,21 @@ function nbwSweep(liveChs){
 return nbwAll().then(function(all){
 return nbwDelMany(all.filter(function(r){return liveChs.indexOf(r.ch)<0}))})
 .catch(function(){return false})}
+// human label for a channel's send cool-off (spam protection), from seconds
+function nbwFmtCool(s){
+var m=Math.round(s/60);
+if(m<60)return m+' min';
+var h=Math.round(m/60);
+if(h<24)return h+' h';
+var d=Math.round(h/24);
+if(d<7)return d+' day'+(d>1?'s':'');
+if(d<28)return Math.round(d/7)+' week'+(d>=14?'s':'');
+return Math.round(d/30)+' month'+(d>=60?'s':'')}
+// mm:ss (or h:mm:ss) for the cool-off countdown
+function nbwFmtWait(s){
+s=Math.max(0,Math.round(s));
+var h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;
+return (h?h+':'+('0'+m).slice(-2):m)+':'+('0'+sec).slice(-2)}
 """
 
 # App mark: a white bell (notifications) with an amber wireless/broadcast signal
@@ -315,6 +330,9 @@ font-size:1.15rem;line-height:1;cursor:pointer;opacity:.85;padding:0}
 .expiry-soon{color:#b45309;font-weight:600}
 .fn-mark{color:#b45309;font-weight:700}
 .fn-note{font-size:.78rem;line-height:1.45}
+.cool-hint{font-size:.8rem;color:var(--muted);margin-top:3px}
+.linklike{background:none;border:0;color:var(--accent);text-decoration:underline;
+cursor:pointer;padding:0;margin:8px 14px 0 0;font:inherit;font-size:.95rem}
 .share-ends{font-size:.85rem;color:#b45309;font-weight:600}
 .extend-notify{display:flex;gap:8px;align-items:flex-start;font-size:.85rem;margin:6px 0}
 .extend-notify input{width:auto;margin:2px 0 0}
@@ -470,6 +488,25 @@ remove all messages from a device: use the browser's private/incognito mode from
 start, remove the channel in the app, or clear this site's browsing data &mdash; and
 dismiss its notifications in the notification center.</p>
 </details>
+<label for="send-limit">Send limit<span class="fn-mark">&#8224;</span> &mdash; spam &amp; flood protection, fixed for the channel's lifetime:</label>
+<select id="send-limit">
+<option value="1">1 message per minute</option>
+<option value="5" selected>1 message per 5 minutes (default)</option>
+<option value="15">1 message per 15 minutes</option>
+<option value="60">1 message per hour</option>
+<option value="180">1 message per 3 hours</option>
+<option value="360">1 message per 6 hours</option>
+<option value="720">1 message per 12 hours</option>
+<option value="1440">1 message per day</option>
+<option value="10080">1 message per week</option>
+<option value="43200">1 message per month</option>
+<option value="custom">custom number of minutes&hellip;</option>
+</select>
+<input id="send-limit-minutes" type="number" min="1" max="43200" placeholder="Minutes between messages (1&ndash;43200)" hidden>
+<p class="muted fn-note">&#8224; DDoS/spam protection: nobody &mdash; including you &mdash; can
+send to this channel more often than this; faster sends are rejected with HTTP 429
+&ldquo;too many requests&rdquo;. The limit cannot be changed later (create a new channel
+to change it).</p>
 <button id="create-btn">Create channel</button>
 <p class="err" id="create-error"></p>
 <div id="create-result" hidden>
@@ -513,6 +550,7 @@ channel code can send.</p>
 <label for="send-code">Channel code</label>
 <input id="send-code" list="send-code-list" placeholder="Paste or pick a channel code" autocomplete="off">
 <datalist id="send-code-list"></datalist>
+<p class="muted" id="send-limit-info" hidden></p>
 <input id="send-title" maxlength="120" placeholder="Title (optional)" autocomplete="off">
 <textarea id="send-body" maxlength="2000" rows="3" placeholder="Message text (optional if a title is given)"></textarea>
 <input id="send-url" maxlength="500" placeholder="Link https://… (optional)" autocomplete="off">
@@ -526,6 +564,7 @@ channel code can send.</p>
 </select>
 <button id="send-btn">Send message</button>
 <p class="err" id="send-error"></p>
+<p class="muted" id="send-wait" hidden></p>
 <p class="status-ok" id="send-ok" hidden></p>
 </div>
 
@@ -553,6 +592,29 @@ the channel code is the only credential, no SDK or login needed.</p>
 <pre>curl -X POST <span id="curl-host"></span>/api/message \\
   -H "Content-Type: application/json" \\
   -d '{"code":"<span id="curl-code">YOUR_CHANNEL_CODE</span>","title":"Hello","body":"World"}'</pre>
+<p class="muted">The same API also works with plain <strong>HTTP GET</strong> (for IoT
+buttons, home automation, bookmarks &mdash; anything that can only call a URL): every
+endpoint takes the same fields as URL parameters and returns the same JSON with standard
+HTTP status codes (200 / 400 / 403 / 404 / 429&hellip;):</p>
+<pre id="get-send-example"></pre>
+<pre id="get-list-example"></pre>
+<div class="row">
+<button type="button" class="linklike" id="try-list">&#9654; View this channel's messages (JSON, GET)</button>
+<button type="button" class="linklike" id="try-send">&#9654; Send a test message via GET</button>
+</div>
+<p class="muted fn-note">The two actions above are deliberately <strong>not</strong> real
+links: they build the URL in JavaScript only when you click, so crawlers, link previews
+and prefetching browsers can never trigger them. The test message is titled
+&ldquo;Test from API&rdquo; with your current local date, time and time zone. On a
+channel without server-side message storage the JSON response of the send is the
+feedback &mdash; the message list stays empty by design.</p>
+<p class="muted fn-note">&#9888; With GET the secret channel code (and any send password)
+becomes <strong>part of the URL</strong>: it can end up in server/infrastructure logs,
+browser history and link previews &mdash; and anything that auto-fetches the URL
+<strong>sends a message</strong> (chat link previews!). Treat GET send-URLs like the code
+itself, never paste one into a chat, and prefer POST for production integrations. Long or
+non-Latin message bodies need POST (URL size limits). On a protected channel replace
+<code>YOUR_SEND_PASSWORD</code> with the real send password before using the URL.</p>
 <details>
 <summary>All endpoints</summary>
 <p class="muted">All are <code>POST</code> with a JSON body; the channel code goes in
@@ -605,7 +667,8 @@ function api(path,payload){
 return fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify(payload)}).then(function(r){
 return r.json().catch(function(){return{}}).then(function(j){
-if(!r.ok){var e=new Error((j&&j.error)||('HTTP '+r.status));e.status=r.status;throw e}
+if(!r.ok){var e=new Error((j&&j.error)||('HTTP '+r.status));e.status=r.status;
+if(j&&j.retry_after)e.retryAfter=j.retry_after;throw e}
 return j})})}
 function renderCodes(){
 var list=$('#code-list');list.textContent='';
@@ -657,6 +720,13 @@ $('#code-input').addEventListener('keydown',function(e){
 if(e.key==='Enter'&&addCode($('#code-input').value))$('#code-input').value=''});
 var msSel=$('#msg-store'),msDays=$('#msg-store-days');
 msSel.addEventListener('change',function(){msDays.hidden=msSel.value!=='custom'});
+var slSel=$('#send-limit'),slMin=$('#send-limit-minutes');
+slSel.addEventListener('change',function(){slMin.hidden=slSel.value!=='custom'});
+function sendLimitValue(){
+if(slSel.value==='custom'){
+var n=parseInt(slMin.value,10);
+return (n>=1&&n<=43200)?n:NaN}
+return parseInt(slSel.value,10)}
 function msgStoreValue(){
 // 'off' | 'max' | retention seconds; NaN signals an invalid custom day count
 if(msSel.value==='custom'){
@@ -698,10 +768,13 @@ $('#create-error').textContent=arSel.value==='date'
 var mstore=msgStoreValue();
 if(typeof mstore==='number'&&isNaN(mstore)){
 $('#create-error').textContent='Message storage: enter a number of days between 1 and 3650.';return}
+var slimit=sendLimitValue();
+if(isNaN(slimit)){
+$('#create-error').textContent='Send limit: enter a number of minutes between 1 and 43200.';return}
 btn.disabled=true;
 $('#create-error').textContent='';
 api('/api/channel',{name:$('#channel-name').value,send_password:$('#channel-password').value,
-auto_remove_days:days,message_store:mstore}).then(function(j){
+auto_remove_days:days,message_store:mstore,send_cooloff_minutes:slimit}).then(function(j){
 $('#new-code').textContent=j.code;
 $('#create-result').hidden=false;
 $('#create-protected').hidden=!j.send_protected;
@@ -724,7 +797,31 @@ setTimeout(function(){t.textContent=old},1200)})});
 // ---- send a message from the landing page
 function updateCurlCode(){
 var c=$('#send-code').value.trim();
-$('#curl-code').textContent=CODE_RE.test(c)?c:'YOUR_CHANNEL_CODE'}
+var ok=CODE_RE.test(c);
+$('#curl-code').textContent=ok?c:'YOUR_CHANNEL_CODE';
+var cc=ok?encodeURIComponent(c):'YOUR_CHANNEL_CODE';
+var gs=$('#get-send-example');
+if(gs)gs.textContent=location.origin+'/api/message?code='+cc+'&title=Hello&body=World';
+var gl=$('#get-list-example');
+if(gl)gl.textContent=location.origin+'/api/messages?code='+cc}
+// Developer try-it actions: JS-built URLs opened only on an explicit click —
+// intentionally NO href anywhere, so crawlers/prefetchers can never fire them
+function devCode(){
+var c=$('#send-code').value.trim();
+if(CODE_RE.test(c))return c;
+alert('Pick or paste a channel code in the send form above first.');return null}
+$('#try-list').addEventListener('click',function(){
+var c=devCode();if(!c)return;
+window.open(location.origin+'/api/messages?code='+encodeURIComponent(c),'_blank','noopener')});
+$('#try-send').addEventListener('click',function(){
+var c=devCode();if(!c)return;
+// title + browser-local date/time incl. time zone, built at CLICK time
+var ts=new Date().toLocaleString([],{timeZoneName:'long'});
+var u=location.origin+'/api/message?code='+encodeURIComponent(c)
++'&title='+encodeURIComponent('Test from API')
++'&body='+encodeURIComponent(ts);
+if($('#send-password').value)u+='&send_password=YOUR_SEND_PASSWORD';
+window.open(u,'_blank','noopener')});
 function updateSendUI(){
 var dl=$('#send-code-list');dl.textContent='';
 codes.forEach(function(c){var o=document.createElement('option');o.value=c;dl.appendChild(o)});
@@ -732,17 +829,35 @@ var sc=$('#send-code');
 if(!sc.value&&codes.length)sc.value=codes[codes.length-1];
 updateCurlCode()}
 $('#send-code').addEventListener('input',updateCurlCode);
+// The channel's send limit (spam protection) — shown whenever a valid code is
+// picked in the send form, straight from the /api/messages snapshot
+function refreshSendLimit(){
+var info=$('#send-limit-info');if(!info)return;
+var c=$('#send-code').value.trim();
+if(!CODE_RE.test(c)){info.hidden=true;return}
+api('/api/messages',{code:c,limit:1}).then(function(j){
+var cool=(j.channel&&j.channel.send_cooloff)||0;
+if(!cool){info.hidden=true;return}
+var t='\\u23F1 Send limit: 1 message per '+nbwFmtCool(cool)+' (spam protection).';
+if(j.send_ready_in>0)t+=' Next send possible in ~'+nbwFmtWait(j.send_ready_in)+'.';
+info.textContent=t;info.hidden=false}).catch(function(){info.hidden=true})}
+$('#send-code').addEventListener('change',refreshSendLimit);
+var _sendTimer=null;
 $('#send-btn').addEventListener('click',function(){
 var code=$('#send-code').value.trim(),title=$('#send-title').value.trim();
-var err=$('#send-error'),ok=$('#send-ok');err.textContent='';ok.hidden=true;
+var err=$('#send-error'),ok=$('#send-ok'),wait=$('#send-wait');
+err.textContent='';ok.hidden=true;wait.hidden=true;
+if(_sendTimer){clearInterval(_sendTimer);_sendTimer=null}
 if(!CODE_RE.test(code)){err.textContent='Enter a valid channel code (create one above, or paste it).';return}
 if(!title&&!$('#send-body').value.trim()){err.textContent='Enter a title or a message.';return}
 var btn=this;btn.disabled=true;
 var payload={code:code,title:title,body:$('#send-body').value,url:$('#send-url').value,send_password:$('#send-password').value};
 var sst=$('#send-store');
 if(sst&&sst.value)payload.store=(sst.value==='off'||sst.value==='max')?sst.value:parseInt(sst.value,10);
+function attempt(){
 api('/api/message',payload)
 .then(function(j){
+wait.hidden=true;
 $('#send-title').value='';$('#send-body').value='';$('#send-url').value='';
 // keep the sender's own copy on this device (the app page shows it), even
 // when the server stores nothing
@@ -757,11 +872,25 @@ else if(j.sent>0)m='Sent to '+j.sent+' device(s)'+(j.stored?'.':' (not stored on
 else m=(j.stored?'Message stored on the server, but no device is subscribed to this channel yet.'
 :'No device is subscribed to this channel yet \\u2014 nobody received this message (it is not stored on the server).')
 +' Install the app on a phone and enable notifications to receive messages.';
-ok.textContent=m;ok.hidden=false})
+ok.textContent=m;ok.hidden=false;btn.disabled=false;refreshSendLimit()})
 .catch(function(e){
+if(e&&e.status===429&&e.retryAfter){
+// the channel's send cool-off (spam protection): keep the message in the
+// form and auto-retry when the window opens
+var left=e.retryAfter;
+function tick(){
+wait.textContent='Sending in '+nbwFmtWait(left)+' due to time-limit cool-off, you must keep this window open before sending.';
+wait.hidden=false;
+if(left<=0){clearInterval(_sendTimer);_sendTimer=null;
+wait.textContent='Sending\\u2026';attempt();return}
+left--}
+if(_sendTimer)clearInterval(_sendTimer);
+tick();_sendTimer=setInterval(tick,1000)}
+else{
+wait.hidden=true;btn.disabled=false;
 if(e&&e.status===403)err.textContent='This channel requires a valid send password.';
-else err.textContent='Could not send: '+(e.message||'error')})
-.then(function(){btn.disabled=false})});
+else err.textContent='Could not send: '+(e.message||'error')}})}
+attempt()});
 // ---- remember channels on this device. Saved AUTOMATICALLY by default (to BOTH
 // localStorage and a cookie for durability — browsers cap JS cookies, Safari ~7 days),
 // merged + self-healed on every load so channels are never accidentally lost. Users can
@@ -886,7 +1015,8 @@ function api(path,payload){
 return fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify(payload)}).then(function(r){
 return r.json().catch(function(){return{}}).then(function(j){
-if(!r.ok){var e=new Error((j&&j.error)||('HTTP '+r.status));e.status=r.status;throw e}
+if(!r.ok){var e=new Error((j&&j.error)||('HTTP '+r.status));e.status=r.status;
+if(j&&j.retry_after)e.retryAfter=j.retry_after;throw e}
 return j})})}
 function lsGet(k,d){try{var v=JSON.parse(localStorage.getItem(k));
 return v==null?d:v}catch(e){return d}}
@@ -1245,6 +1375,7 @@ card.appendChild(el('div','channel-latest',''));
 var sh=el('div','store-hint',
 '\\uD83D\\uDD12 Messages are not stored on the server \\u2014 this list is this device\\u2019s own copy.');
 sh.hidden=true;card.appendChild(sh);
+var cl=el('div','cool-hint','');cl.hidden=true;card.appendChild(cl);
 var endLabel=expiryLabel(code);
 if(endLabel){
 var dl=expiryDaysLeft(code);
@@ -1288,15 +1419,19 @@ var sst=document.createElement('select');sst.className='send-store';
 op.value=o[0];op.textContent=o[1];sst.appendChild(op)});
 var se=el('button','','Send');
 var serr=el('div','muted');
+var sendTimer=null;
 se.addEventListener('click',function(){
 if(!ti.value.trim()&&!bo.value.trim()){serr.textContent='Enter a title or a message.';return}
 se.disabled=true;serr.textContent='';
+if(sendTimer){clearInterval(sendTimer);sendTimer=null}
 var body={code:code,title:ti.value,body:bo.value,url:ur.value,send_password:pw.value};
 if(sst.value)body.store=(sst.value==='off'||sst.value==='max')?sst.value:parseInt(sst.value,10);
+function attempt(){
 api('/api/message',body)
 .then(function(j){
 ti.value='';bo.value='';ur.value='';
 serr.textContent='Sent to '+j.sent+' device(s)'+(j.stored?'.':' (not stored on the server).');
+se.disabled=false;
 // local echo: the sender's own device keeps the full message even when the
 // server stores nothing; mark it seen so it never toasts at its author
 var ch=chMap[code];
@@ -1309,8 +1444,21 @@ name:card.querySelector('h2').textContent||''})
 .then(function(){refreshChannel(code,true)})}
 else refreshChannel(code,true)})
 .catch(function(e){
-serr.textContent=(e&&e.status===403)?'This channel requires a valid send password.':('Error: '+e.message)})
-.then(function(){se.disabled=false})});
+if(e&&e.status===429&&e.retryAfter){
+// per-channel send cool-off (spam protection): hold the message in the
+// form and auto-retry when the window opens
+var left=e.retryAfter;
+function tick(){
+serr.textContent='Sending in '+nbwFmtWait(left)+' due to time-limit cool-off, you must keep this window open before sending.';
+if(left<=0){clearInterval(sendTimer);sendTimer=null;
+serr.textContent='Sending\\u2026';attempt();return}
+left--}
+if(sendTimer)clearInterval(sendTimer);
+tick();sendTimer=setInterval(tick,1000)}
+else{
+se.disabled=false;
+serr.textContent=(e&&e.status===403)?'This channel requires a valid send password.':('Error: '+e.message)}})}
+attempt()});
 d.appendChild(ti);d.appendChild(bo);d.appendChild(ur);d.appendChild(pw);
 d.appendChild(sst);d.appendChild(se);d.appendChild(serr);
 card.appendChild(d);
@@ -1474,6 +1622,11 @@ var msgStore=(j.channel&&j.channel.message_store!==undefined&&j.channel.message_
 ?j.channel.message_store:-1;
 card.setAttribute('data-store',String(msgStore));
 var hint=card.querySelector('.store-hint');if(hint)hint.hidden=msgStore!==0;
+// the channel's send limit (spam protection) — always visible per channel
+var cool=(j.channel&&j.channel.send_cooloff)||0;
+var ch_=card.querySelector('.cool-hint');
+if(ch_){ch_.hidden=!cool;
+if(cool)ch_.textContent='\\u23F1 Send limit: 1 message per '+nbwFmtCool(cool)+' (spam protection)'}
 return mergeMsgs(code,j.messages||[]).then(function(mm){
 var list=mm.list,serverIds=mm.server;
 var latest=(list[0]&&list[0].ts)||j.channel.created||0;

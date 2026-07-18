@@ -1,14 +1,19 @@
 """Single Vercel entrypoint for NotifyByWebApp.
 
-Serves the web UI, PWA assets and the JSON API. All API calls are POST
-with the channel code in the body — codes never appear in URLs, so they
-cannot end up in platform request logs.
+Serves the web UI, PWA assets and the JSON API. The recommended API is POST
+with the channel code in the body — that keeps codes out of URLs and
+platform request logs. Every endpoint ALSO accepts GET with the same fields
+as query parameters (an explicit integrator opt-in for callers that can only
+fire URLs); a GET puts the code into the request line, which the hosting
+platform may log — the app's own pages never do this, and this handler's own
+logging stays silenced either way.
 """
 from __future__ import annotations
 
 import hmac
 import json
 import os
+import re
 import sys
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
@@ -212,17 +217,93 @@ class handler(BaseHTTPRequestHandler):
                     cache=CACHE_ASSET,
                 )
             elif path == "/api/health":
-                self._json(200, {"ok": True})
+                self._json(200, {"ok": True})  # uptime probes: never limited
             elif path == "/api/status":
-                self._status()
+                if not core.limiter.allow(self._client_ip(), core.rate_per_min()):
+                    self._rate_limited_response()
+                else:
+                    self._status()
             elif path.startswith("/api/"):
-                self._error(404, "not found")
+                self._get_api(path)
             else:
                 self._send(404, "Not found\n", "text/plain; charset=utf-8")
         except (ConnectionError, BrokenPipeError, TimeoutError):
             return  # client went away mid-response; nothing to say
         except Exception:
             self._safe_error(500, "internal error")
+
+    # ----------------------------------------------------------- GET API
+
+    # Fields coerced from query strings so the strict validators accept them
+    _GET_INT_FIELDS = (
+        "limit",
+        "keep",
+        "auto_remove_days",
+        "send_cooloff_minutes",
+        "store",
+        "message_store",
+    )
+    # Link-preview / unfurler agents that auto-fetch URLs pasted into chats —
+    # they must never trigger a mutating GET (robots.txt is ignored by most)
+    _PREVIEW_UAS = (
+        "facebookexternalhit",
+        "whatsapp",
+        "slackbot",
+        "twitterbot",
+        "telegrambot",
+        "discordbot",
+        "skypeuripreview",
+        "linkedinbot",
+        "bingpreview",
+        "googlebot",
+    )
+
+    def _get_api(self, path: str) -> None:
+        """GET twins of the POST API (REST-like): same fields as URL query
+        parameters, same handlers, same JSON responses and status codes.
+        NOTE this deliberately puts the channel code into a URL — an explicit,
+        documented integrator opt-in (see CLAUDE.md); the app's own pages
+        never do this."""
+        if not core.limiter.allow(self._client_ip(), core.rate_per_min()):
+            self._drain_body()
+            self._rate_limited_response()
+            return
+        if path != "/api/messages":
+            # mutating GETs: refuse speculative fetches (omnibox preload,
+            # speculation-rules prefetch) — a real click never carries these
+            for h in ("Sec-Purpose", "Purpose", "X-Moz"):
+                v = (self.headers.get(h) or "").lower()
+                if "prefetch" in v or "preview" in v or "prerender" in v:
+                    self._error(
+                        403, "speculative fetch refused — open the URL explicitly"
+                    )
+                    return
+            ua = (self.headers.get("User-Agent") or "").lower()
+            if any(bot in ua for bot in self._PREVIEW_UAS):
+                self._error(403, "preview/crawler agents may not call this API")
+                return
+        try:
+            params = parse_qs(urlparse(self.path).query, errors="strict")
+        except (UnicodeDecodeError, ValueError):
+            self._error(400, "invalid query string")
+            return
+        payload: dict = {}
+        for key, values in params.items():
+            value = values[0]  # duplicate params: first one wins
+            if key in self._GET_INT_FIELDS and re.fullmatch(r"-?\d+", value or ""):
+                payload[key] = int(value)
+            elif key == "notify":
+                payload[key] = value.lower() not in ("0", "false", "no", "off")
+            elif key == "subscription":
+                try:
+                    payload[key] = json.loads(value)
+                except json.JSONDecodeError:
+                    self._error(400, "subscription must be URL-encoded JSON")
+                    return
+            else:
+                payload[key] = value
+        self._drain_body()
+        self._dispatch_api(path, payload)
 
     # -------------------------------------------------------------- POST
 
@@ -234,16 +315,25 @@ class handler(BaseHTTPRequestHandler):
             return
         if not core.limiter.allow(self._client_ip(), core.rate_per_min()):
             self._drain_body()
-            self._send(
-                429,
-                json.dumps({"ok": False, "error": "rate limit exceeded"}),
-                "application/json",
-                {"Retry-After": "60", "Access-Control-Allow-Origin": "*"},
-            )
+            self._rate_limited_response()
             return
         payload = self._read_json_body()
         if payload is None:
             return
+        self._dispatch_api(path, payload)
+
+    def _rate_limited_response(self) -> None:
+        self._send(
+            429,
+            json.dumps({"ok": False, "error": "rate limit exceeded"}),
+            "application/json",
+            {"Retry-After": "60", "Access-Control-Allow-Origin": "*"},
+        )
+
+    def _dispatch_api(self, path: str, payload: dict) -> None:
+        """Shared route table AND exception→status mapping for the POST API
+        and its GET twins — both verbs must yield identical JSON responses
+        and standard HTTP status codes."""
         try:
             if path == "/api/channel":
                 self._post_channel(payload)
@@ -265,6 +355,29 @@ class handler(BaseHTTPRequestHandler):
                 self._error(404, "not found")
         except (ConnectionError, BrokenPipeError, TimeoutError):
             return
+        except core.CoolingOff as exc:
+            # per-channel send cool-off (DDoS/spam protection): standard 429
+            # with Retry-After; retry_after in the JSON drives the UI countdown
+            if not getattr(self, "_responded", False):
+                try:
+                    self._send(
+                        429,
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "error": "channel send limit reached — too many "
+                                "messages, try again later",
+                                "retry_after": exc.retry_after,
+                            }
+                        ),
+                        "application/json",
+                        {
+                            "Retry-After": str(exc.retry_after),
+                            "Access-Control-Allow-Origin": "*",
+                        },
+                    )
+                except (ConnectionError, BrokenPipeError, TimeoutError, OSError):
+                    pass
         except core.ChannelFull:
             self._safe_error(409, "channel subscriber limit reached")
         except core.SendForbidden:
@@ -308,7 +421,10 @@ class handler(BaseHTTPRequestHandler):
         message_store = (
             core.STORE_OFF if ms is None else core.validate_message_store(ms)
         )
-        result = core.create_channel(name, send_password, days, message_store)
+        cooloff = core.validate_send_cooloff(payload.get("send_cooloff_minutes"))
+        result = core.create_channel(
+            name, send_password, days, message_store, cooloff
+        )
         self._json(200, {"ok": True, **result})
 
     def _post_channel_extend(self, payload: dict) -> None:
@@ -328,12 +444,15 @@ class handler(BaseHTTPRequestHandler):
         notify = payload.get("notify", True)
         ms = payload.get("message_store")
         message_store = None if ms is None else core.validate_message_store(ms)
+        cm = payload.get("send_cooloff_minutes")
+        send_cooloff = None if cm is None else core.validate_send_cooloff(cm)
         result = core.extend_channel(
             code,
             days,
             payload.get("send_password"),
             notify=bool(notify),
             message_store=message_store,
+            send_cooloff=send_cooloff,
         )
         if result is None:
             self._error(404, "unknown channel")

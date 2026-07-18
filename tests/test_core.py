@@ -633,6 +633,93 @@ def test_extend_channel_copies_meta_and_messages(env, push_calls):
     assert mig["exp"] == old["expires"]  # SW suppresses it after the old end date
 
 
+# --------------------------------------- send cool-off (DDoS/spam protection)
+
+
+def test_validate_send_cooloff_bounds(env):
+    env.setenv("NBW_DEFAULT_COOLOFF_MINUTES", "5")
+    env.setenv("NBW_MIN_COOLOFF_MINUTES", "1")
+    assert core.validate_send_cooloff(None) == 300  # default 1 msg / 5 min
+    assert core.validate_send_cooloff(1) == 60
+    assert core.validate_send_cooloff(core.MAX_COOLOFF_MINUTES) == 43200 * 60
+    for bad in (0, -1, 43201, True, "5", 1.5):
+        with pytest.raises(ValueError):
+            core.validate_send_cooloff(bad)
+    # the env knob can allow 0 = disabled (used by the test suite/self-hosters)
+    env.setenv("NBW_MIN_COOLOFF_MINUTES", "0")
+    assert core.validate_send_cooloff(0) == 0
+
+
+def test_publish_respects_channel_cooloff(env, monkeypatch):
+    core.reset_storage_for_tests()
+    code = core.create_channel("Cool", send_cooloff=300)["code"]
+    assert core.publish(code, core.validate_message({"title": "first"}))
+    with pytest.raises(core.CoolingOff) as exc:
+        core.publish(code, core.validate_message({"title": "second"}))
+    assert 1 <= exc.value.retry_after <= 300
+    # a blocked attempt did NOT extend the window; after it passes, send works
+    real = time.time
+    monkeypatch.setattr(core.time, "time", lambda: real() + 301)
+    assert core.publish(code, core.validate_message({"title": "third"}))
+
+
+def test_snapshot_exposes_cooloff_and_ready_in(env):
+    core.reset_storage_for_tests()
+    code = core.create_channel("CoolSnap", send_cooloff=300)["code"]
+    snap = core.channel_snapshot(code, 5)
+    assert snap["channel"]["send_cooloff"] == 300
+    assert snap["send_ready_in"] == 0  # nothing sent yet
+    core.publish(code, core.validate_message({"title": "x"}))
+    snap = core.channel_snapshot(code, 5)
+    assert 0 < snap["send_ready_in"] <= 300
+
+
+def test_legacy_channel_gets_default_cooloff(env):
+    """Channels created before the setting existed have no `cooloff` in meta —
+    the production default (5 min) applies to them too (owner decision)."""
+    env.setenv("NBW_DEFAULT_COOLOFF_MINUTES", "5")
+    core.reset_storage_for_tests()
+    storage = core.get_storage()
+    code = core.generate_code()
+    storage.create_channel(
+        core.code_hash(code), json.dumps({"name": "Legacy", "created": 1})
+    )
+    assert core.channel_snapshot(code, 5)["channel"]["send_cooloff"] == 300
+    core.publish(code, core.validate_message({"title": "one"}))
+    with pytest.raises(core.CoolingOff):
+        core.publish(code, core.validate_message({"title": "two"}))
+
+
+def test_extend_migration_notice_bypasses_cooloff(env):
+    core.reset_storage_for_tests()
+    old = core.create_channel("CoolExt", auto_remove_days=2, send_cooloff=300)
+    # the user just sent — the cool-off window is active
+    core.publish(old["code"], core.validate_message({"title": "recent"}))
+    # extending still delivers the migration notice (internal system message)
+    res = core.extend_channel(old["code"], 30, notify=True)
+    assert "notified" in res  # publish was not blocked by CoolingOff
+    assert res["send_cooloff"] == 300  # successor inherits the limit
+    # …and an explicit new value wins
+    res2 = core.extend_channel(old["code"], 30, notify=False, send_cooloff=60)
+    assert res2["send_cooloff"] == 60
+
+
+def test_try_mark_send_primitives():
+    st = core.MemoryStorage()
+    assert st.try_mark_send("kh", 300) is None  # first send allowed
+    wait = st.try_mark_send("kh", 300)
+    assert isinstance(wait, int) and 1 <= wait <= 300
+    assert 0 < st.send_wait("kh") <= 300
+    assert st.send_wait("other") == 0
+    # Redis command shapes: atomic SET NX EX + TTL in one pipeline
+    fr = FakeRedis([["OK", -2], [None, 42], [17]])
+    assert fr.try_mark_send("kh", 300) is None
+    assert fr.calls[0][0] == ["SET", "nbw:cool:kh", "1", "NX", "EX", "300"]
+    assert fr.calls[0][1] == ["TTL", "nbw:cool:kh"]
+    assert fr.try_mark_send("kh", 300) == 42  # blocked: TTL = remaining
+    assert fr.send_wait("kh") == 17
+
+
 # ------------------------------------------------- deployed-commit footer
 
 

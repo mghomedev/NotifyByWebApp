@@ -23,8 +23,43 @@ and in README.md; keep all three in sync.
 - **Channel** = secret code (bearer capability), `secrets.token_urlsafe(24)` → 32 chars,
   192 bits. Format-checked everywhere: `^[A-Za-z0-9_-]{16,64}$`.
 - The server stores only `sha256(code)` ("kh") — never the raw code → a storage leak does
-  not leak send capability. Codes travel only in POST bodies (never URLs → never in
-  platform request logs) and in the app URL **fragment** (never sent to servers).
+  not leak send capability. THE APP'S OWN pages/flows put codes only in POST bodies and
+  the URL **fragment** (never in server-sent URLs → never in platform request logs).
+  AMENDED for the GET API: integrators may OPT IN to calling every endpoint via GET with
+  the code as a query parameter — those URLs can land in platform request logs / browser
+  history (documented loudly; our own `log_message` stays silent either way; POST remains
+  the recommended path).
+- **GET API (REST-like twins)**: every POST endpoint also accepts GET with the same
+  fields as query parameters — same handlers via the shared `_dispatch_api` (route table
+  + full exception→status chain used by BOTH verbs), so JSON responses and standard
+  status codes (400/403/404/409/429/502) are identical by construction. Query coercion:
+  `limit`/`keep`/`auto_remove_days`/`send_cooloff_minutes`/`store`/`message_store` →
+  int when `-?\d+`; `notify` → False for 0/false/no/off; `subscription` → URL-encoded
+  JSON; `code` never coerced; duplicates → first wins; invalid %-UTF-8 → 400. Guards on
+  mutating GETs: `Sec-Purpose`/`Purpose`/`X-Moz` prefetch/prerender → 403, link-preview
+  UA blocklist (whatsapp, facebookexternalhit, slackbot, …) → 403; `robots.txt` already
+  disallows `/api/`; no `do_HEAD` (HEAD → 501, no side effects). The per-IP limiter now
+  covers GET `/api/*` incl. `/api/status` (`/api/health` stays exempt for uptime
+  probes). Long/non-Latin bodies can exceed the platform URL cap (~14 KB) → POST only
+  (documented). Dev-section "try it" actions are hrefless BUTTONS whose URLs are built
+  in JS at click time (crawlers/prefetchers can never fire them); a typed send-password
+  is NEVER embedded — a `YOUR_SEND_PASSWORD` placeholder is.
+- **Send cool-off (per-channel DDoS/spam protection)**: a minimum interval between
+  messages, chosen at creation and FIXED for the channel's lifetime
+  (`send_cooloff_minutes` on `/api/channel`(+extend), presets 1 min … 1 month, custom
+  1–43200 min, default **1 msg / 5 min**; env knobs `NBW_DEFAULT_COOLOFF_MINUTES` /
+  `NBW_MIN_COOLOFF_MINUTES` for self-hosters — the test suite sets both to 0; channels
+  whose meta predates the field get the default too). Enforced in `publish()` for EVERY
+  sender via the atomic storage primitive `try_mark_send` (Redis `SET NX EX` + `TTL` in
+  one pipeline — the key's TTL IS the remaining wait; blocked attempts don't extend the
+  window) → `CoolingOff` → **429** with `Retry-After` header + `retry_after` in JSON
+  (the presence of `retry_after` is what distinguishes it from the per-IP 429 for the
+  UI). The extend-channel migration notice bypasses the check (internal system message)
+  without starting a window. Discovery API: snapshot `channel.send_cooloff` +
+  `send_ready_in`. UI: the limit shows on every channel card + the landing send form;
+  a blocked send keeps the message in the form and ticks "Sending in M:SS due to
+  time-limit cool-off, you must keep this window open before sending", auto-retrying
+  when the window opens (both send surfaces).
 - Possession of the code ⇒ may subscribe AND send (deliberate; a separate subscribe-only
   key remains a possible future option).
 - **Auto-remove (optional)**: a channel may be created with an end date — never (default),
@@ -178,7 +213,8 @@ Users trust that saved channels persist locally; losing that state loses their c
   `/a` returning-visitor redirect reads it. (The `nbw_codes` **cookie** rides in request
   headers, but that is not a new leak: every `/api` POST already carries the raw code in its
   body — the code is a bearer capability the server needs — and the guarded invariant is
-  codes-never-in-**URLs**/logs, not codes-never-in-cookies.)
+  that the APP'S OWN flows never put codes in server-sent URLs; the opt-in GET API is
+  the documented exception, not this cookie.)
 - **Never** rename, clear, or change the FORMAT of these keys without a migration that
   preserves existing data; never clear them implicitly; keep this code stable across
   releases. Treat it as load-bearing user data.
@@ -371,7 +407,7 @@ Users trust that saved channels persist locally; losing that state loses their c
   Fails closed: 404 when the secret env var is unset, 401 on a wrong/missing secret.
   Lets the deployment be health-checked black-box (`core.diagnostics()`).
 
-## Tests (pytest; must be green before every deploy) — 228 tests
+## Tests (pytest; must be green before every deploy) — 244 tests
 
 - `tests/test_core.py` — unit: codes, validation, SSRF host guard, control-char cleaning,
   limiter (deterministic clock + bounded size), config parsing, both storage backends
@@ -395,7 +431,17 @@ Users trust that saved channels persist locally; losing that state loses their c
   snapshot + payload `ch`, per-message `store` override, retention `expires_at`, 400s).
   The shared `channel` fixture opts into `message_store:"max"` (legacy behavior) so
   storage-dependent tests keep exercising the stored path; the anonymous default has its
-  own tests.
+  own tests. GET API: per-endpoint twins (send/list/create/extend/delete/clear/
+  subscribe/unsubscribe) with identical JSON + status codes (the 403-wrong-password case
+  proves the shared exception chain), query coercion incl. the `notify=false` trap,
+  duplicate-param first-wins, blank/bad codes, prefetch-header + unfurler-UA 403s with
+  nothing stored, HEAD → 501 no side effects, per-IP limiter now covering GET incl.
+  `/api/status`, `no-store` + CORS headers, and the code-bearing-GET no-logging guard.
+  Cool-off: default 300 s via API, 429 + `Retry-After` + `retry_after` on POST and GET,
+  snapshot discovery fields, patched-clock recovery, creation bounds. (Core adds:
+  `validate_send_cooloff` bounds/env knobs, `try_mark_send` primitives + FakeRedis
+  `SET NX EX`+`TTL` shapes, blocked-attempt-doesn't-extend, legacy-meta default,
+  migration-notice bypass + successor inheritance.)
 - `tests/test_storage_http.py` — the real `RedisStorage` HTTP layer against a fake Upstash
   REST server (request shape, Bearer auth, `/pipeline`, per-command error, non-JSON, refused
   connection → `StorageError`).
@@ -422,7 +468,12 @@ Users trust that saved channels persist locally; losing that state loses their c
   channel's `.store-hint` + sender echo rendering/surviving reload with `/api/messages`
   empty + local delete, the local/server merge deduping by id, and the create-form
   storage select + pros/cons explainer (incl. the platform-transport and local-device
-  disclosures).
+  disclosures). GET API dev section: examples populated as TEXT, try-it actions are
+  hrefless BUTTONS (no `/api/` anchors anywhere in the dev section), send-test popup →
+  "Test from API" + client-local timestamp lands in the channel, typed send-password →
+  placeholder only. Cool-off UI: the limit shows on the card + landing form; a blocked
+  send ticks the "time-limit cool-off" countdown near Send and auto-retries to success
+  (both surfaces, short-cool-off channel created via core).
 - `tests/test_ui_notifications.py` + `tests/uikit.py` — **HEADED** Chromium (headless denies
   notification permission): delivers a real push into the SW via CDP
   `ServiceWorker.deliverPushMessage` and asserts the displayed notification’s

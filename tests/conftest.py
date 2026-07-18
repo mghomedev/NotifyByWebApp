@@ -68,6 +68,11 @@ def env(monkeypatch):
     monkeypatch.setenv("VAPID_PUBLIC_KEY", TEST_VAPID_PUBLIC)
     monkeypatch.setenv("VAPID_SUBJECT", "mailto:test@example.invalid")
     monkeypatch.setenv("NBW_STATUS_SECRET", TEST_STATUS_SECRET)
+    # Disable the per-channel send cool-off (DDoS/spam protection; production
+    # default 1 msg / 5 min) so unrelated tests can send freely — the
+    # dedicated cool-off tests set their own values/env.
+    monkeypatch.setenv("NBW_DEFAULT_COOLOFF_MINUTES", "0")
+    monkeypatch.setenv("NBW_MIN_COOLOFF_MINUTES", "0")
     for var in ("VERCEL_ENV", "VERCEL_GIT_COMMIT_SHA", "VERCEL_REGION"):
         monkeypatch.delenv(var, raising=False)
     notify_core.reset_storage_for_tests()
